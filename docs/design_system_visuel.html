@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Design System — Sauge & Brique</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#F0E5D0;
+  --paper-light:#FBF4E2;
+  --paper-deep:#E5D7BC;
+  --ink:#1A1410;
+  --ink-soft:#5C4F40;
+  --brique:#C5594A;
+  --sauge:#7B9E89;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{
+  background:var(--paper);
+  background-image:radial-gradient(circle, rgba(123,158,137,0.13) 1.5px, transparent 1.5px);
+  background-size:8px 8px;
+  color:var(--ink);
+  font-family:'Hanken Grotesk',sans-serif;line-height:1.5;
+}
+.page{max-width:920px;margin:0 auto;padding:48px 24px 80px}
+
+header{margin-bottom:40px;border-bottom:3px solid var(--ink);padding-bottom:22px}
+.eyebrow{
+  display:inline-block;font-family:'JetBrains Mono';font-weight:700;font-size:11px;
+  text-transform:uppercase;letter-spacing:0.18em;color:var(--paper);
+  background:var(--brique);padding:6px 12px;border:2px solid var(--ink);
+  box-shadow:3px 3px 0 var(--ink);margin-bottom:18px;
+}
+header h1{font-family:'Silkscreen';font-weight:700;font-size:clamp(26px,5vw,40px);line-height:1.1;text-transform:uppercase;margin-bottom:10px}
+header p{max-width:640px;color:var(--ink-soft);font-size:14px}
+
+.section{margin-top:48px}
+.section-label{
+  font-family:'Silkscreen';font-weight:700;font-size:16px;text-transform:uppercase;
+  margin-bottom:20px;display:flex;align-items:center;gap:12px;
+}
+.section-label::after{content:'';flex:1;height:3px;background:var(--ink)}
+
+.card{
+  background:var(--paper-light);border:2.5px solid var(--ink);
+  box-shadow:5px 5px 0 var(--sauge);padding:24px;margin-bottom:16px;
+}
+.card.brique-sh{box-shadow:5px 5px 0 var(--brique)}
+.sub{font-family:'JetBrains Mono';font-size:11px;font-weight:600;color:var(--ink-soft);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:16px}
+
+/* COLOR SWATCHES */
+.swatches{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.swatch{border:2px solid var(--ink);overflow:hidden}
+.swatch-color{height:64px}
+.swatch-info{padding:8px 10px;background:var(--paper-light);font-family:'JetBrains Mono';font-size:11px}
+.swatch-info .nm{font-weight:700;display:block}
+.swatch-info .hx{color:var(--ink-soft);font-size:10px}
+
+/* TYPE SCALE */
+.type-row{display:flex;align-items:baseline;gap:16px;padding:12px 0;border-bottom:1.5px solid var(--paper-deep)}
+.type-row:last-child{border-bottom:none}
+.type-tag{font-family:'JetBrains Mono';font-size:10px;font-weight:700;color:var(--ink-soft);width:130px;flex-shrink:0;text-transform:uppercase}
+.t-silk-l{font-family:'Silkscreen';font-size:28px;text-transform:uppercase}
+.t-silk-m{font-family:'Silkscreen';font-size:18px;text-transform:uppercase}
+.t-silk-s{font-family:'Silkscreen';font-size:13px}
+.t-body-l{font-family:'Hanken Grotesk';font-size:15px;font-weight:500}
+.t-body-m{font-family:'Hanken Grotesk';font-size:13px;font-weight:500}
+.t-caption{font-family:'Hanken Grotesk';font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--ink-soft)}
+
+/* COMPONENT DEMOS */
+.demo-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:24px}
+.demo{}
+.demo-title{font-family:'JetBrains Mono';font-size:11px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;margin-bottom:12px;letter-spacing:0.06em}
+.demo-stage{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+
+/* buttons */
+.btn{font-family:'Silkscreen';font-size:12px;text-transform:uppercase;border:2px solid var(--ink);padding:11px 18px;cursor:pointer;letter-spacing:-0.01em}
+.btn-primary{background:var(--brique);color:var(--paper-light);box-shadow:3px 3px 0 var(--ink)}
+.btn-secondary{background:var(--paper-light);color:var(--ink);box-shadow:3px 3px 0 var(--sauge)}
+.btn-ghost{background:transparent;color:var(--ink);border-style:dashed}
+
+/* count badge */
+.badge{font-family:'Silkscreen';font-size:13px;background:var(--brique);color:var(--paper-light);border:2px solid var(--ink);min-width:34px;height:34px;display:inline-flex;align-items:center;justify-content:center;padding:0 9px;box-shadow:2px 2px 0 var(--ink)}
+.badge.sauge{background:var(--sauge);color:var(--ink)}
+.badge.empty{background:var(--paper);color:var(--ink)}
+
+/* checkbox */
+.check{width:26px;height:26px;border-radius:6px;border:2.5px solid var(--ink);background:var(--paper);display:inline-flex;align-items:center;justify-content:center}
+.check.checked{background:var(--brique)}
+.check.checked svg{width:15px;height:15px;color:var(--paper-light);stroke-width:3.5}
+
+/* avatar */
+.avatar{width:40px;height:40px;border:2.5px solid var(--ink);display:flex;align-items:center;justify-content:center;font-family:'Silkscreen';font-size:15px;color:var(--paper-light);box-shadow:2px 2px 0 var(--ink)}
+.avatar.toi{background:var(--sauge);color:var(--ink)}
+.avatar.elle{background:var(--brique)}
+
+/* input bars */
+.add-bar{background:var(--sauge);border:2px solid var(--ink);border-radius:10px;padding:11px 14px;display:flex;align-items:center;gap:12px;color:var(--ink);font-family:'Hanken Grotesk';font-size:13px;font-weight:600;box-shadow:3px 3px 0 var(--ink);min-width:240px}
+.add-bar svg{width:16px;height:16px;stroke-width:3}
+.search-bar{background:var(--paper-light);border:2px solid var(--ink);border-radius:10px;padding:11px 14px;display:flex;align-items:center;gap:12px;color:var(--ink-soft);font-family:'Hanken Grotesk';font-size:13px;font-weight:500;box-shadow:3px 3px 0 var(--sauge);min-width:240px}
+.search-bar svg{width:16px;height:16px;stroke-width:2.5;color:var(--ink)}
+
+/* category header */
+.cat-head{background:var(--ink);color:var(--paper);padding:6px 12px;border-radius:6px;display:flex;justify-content:space-between;align-items:center;min-width:240px}
+.cat-head h4{font-family:'Silkscreen';font-size:15px}
+.cat-head .ct{font-family:'JetBrains Mono';font-size:11px;font-weight:700;color:var(--sauge)}
+
+/* frequency pips */
+.freq{display:flex;gap:4px}
+.freq .pip{width:9px;height:9px;border:1.5px solid var(--ink);background:var(--paper)}
+.freq .pip.on{background:var(--brique)}
+
+/* tile */
+.tile{background:var(--paper-light);border:2px solid var(--ink);padding:13px 15px;min-width:240px}
+.tile.s1{box-shadow:4px 4px 0 var(--brique)}
+.tile.s2{box-shadow:4px 4px 0 var(--sauge)}
+.tile-row{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.tile h3{font-family:'Silkscreen';font-size:17px;text-transform:uppercase;margin-bottom:4px;line-height:1}
+.tile-meta{font-family:'Hanken Grotesk';font-size:10.5px;font-weight:600;color:var(--ink-soft);letter-spacing:0.04em;text-transform:uppercase}
+
+/* nav */
+.nav-demo{display:flex;gap:6px;background:var(--paper-light);border:2.5px solid var(--ink);padding:8px;border-radius:10px;min-width:280px}
+.nav-item{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px;font-family:'Silkscreen';font-size:9px;text-transform:uppercase;color:var(--ink-soft);border:2px solid transparent}
+.nav-item.active{background:var(--brique);color:var(--paper-light);border:2px solid var(--ink);box-shadow:2px 2px 0 var(--ink)}
+.nav-item svg{width:20px;height:20px;stroke-width:2.5}
+
+@media (max-width:768px){.page{padding:32px 16px 64px}}
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <div class="eyebrow">▸ Design System · Sauge & Brique</div>
+  <h1>La boîte à outils visuelle</h1>
+  <p>Toutes les briques de l'interface réunies. C'est la "source de vérité" : tout écran de l'appli se construit à partir de ces composants, sans rien réinventer.</p>
+</header>
+
+<!-- COULEURS -->
+<div class="section">
+  <div class="section-label">1 · Couleurs</div>
+  <div class="card brique-sh">
+    <div class="swatches">
+      <div class="swatch"><div class="swatch-color" style="background:#F0E5D0"></div><div class="swatch-info"><span class="nm">Papier</span><span class="hx">#F0E5D0 · fond</span></div></div>
+      <div class="swatch"><div class="swatch-color" style="background:#FBF4E2"></div><div class="swatch-info"><span class="nm">Papier clair</span><span class="hx">#FBF4E2 · cartes</span></div></div>
+      <div class="swatch"><div class="swatch-color" style="background:#E5D7BC"></div><div class="swatch-info"><span class="nm">Papier profond</span><span class="hx">#E5D7BC · séparateurs</span></div></div>
+      <div class="swatch"><div class="swatch-color" style="background:#1A1410"></div><div class="swatch-info"><span class="nm">Encre</span><span class="hx">#1A1410 · texte/bordures</span></div></div>
+      <div class="swatch"><div class="swatch-color" style="background:#5C4F40"></div><div class="swatch-info"><span class="nm">Encre soft</span><span class="hx">#5C4F40 · méta</span></div></div>
+      <div class="swatch"><div class="swatch-color" style="background:#C5594A"></div><div class="swatch-info"><span class="nm">Brique</span><span class="hx">#C5594A · accent 1</span></div></div>
+      <div class="swatch"><div class="swatch-color" style="background:#7B9E89"></div><div class="swatch-info"><span class="nm">Sauge</span><span class="hx">#7B9E89 · accent 2</span></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- TYPO -->
+<div class="section">
+  <div class="section-label">2 · Typographie</div>
+  <div class="card">
+    <div class="sub">Silkscreen — titres, noms, compteurs · Hanken Grotesk — corps, UI, méta</div>
+    <div class="type-row"><span class="type-tag">Display L · Silkscreen</span><span class="t-silk-l">Nos listes</span></div>
+    <div class="type-row"><span class="type-tag">Display M · Silkscreen</span><span class="t-silk-m">Auchan</span></div>
+    <div class="type-row"><span class="type-tag">Display S · Silkscreen</span><span class="t-silk-s">8 articles</span></div>
+    <div class="type-row"><span class="type-tag">Body L · Hanken 15</span><span class="t-body-l">Tomates cerises, salade roquette…</span></div>
+    <div class="type-row"><span class="type-tag">Body M · Hanken 13</span><span class="t-body-m">Lait demi-écrémé, yaourts grecs</span></div>
+    <div class="type-row"><span class="type-tag">Caption · Hanken 11</span><span class="t-caption">8 articles · maj 12 min</span></div>
+  </div>
+</div>
+
+<!-- SIGNATURE RISO -->
+<div class="section">
+  <div class="section-label">3 · Signature riso</div>
+  <div class="card brique-sh">
+    <div class="sub">Bordure encre 2px (ou 2.5px) + ombre décalée 3-4px en sauge OU brique. Coins arrondis 8-14px. C'est ce qui donne l'identité "imprimé".</div>
+    <div class="demo-stage" style="gap:28px">
+      <div style="background:var(--paper-light);border:2px solid var(--ink);box-shadow:4px 4px 0 var(--sauge);padding:18px 24px;font-family:'Silkscreen';font-size:13px;border-radius:10px">Ombre sauge</div>
+      <div style="background:var(--paper-light);border:2px solid var(--ink);box-shadow:4px 4px 0 var(--brique);padding:18px 24px;font-family:'Silkscreen';font-size:13px;border-radius:10px">Ombre brique</div>
+    </div>
+  </div>
+</div>
+
+<!-- COMPOSANTS -->
+<div class="section">
+  <div class="section-label">4 · Composants</div>
+  <div class="card">
+    <div class="demo-grid">
+
+      <div class="demo">
+        <div class="demo-title">Boutons</div>
+        <div class="demo-stage">
+          <button class="btn btn-primary">Valider</button>
+          <button class="btn btn-secondary">Annuler</button>
+        </div>
+        <div class="demo-stage" style="margin-top:10px">
+          <button class="btn btn-ghost">+ Nouvelle liste</button>
+        </div>
+      </div>
+
+      <div class="demo">
+        <div class="demo-title">Compteurs (badges)</div>
+        <div class="demo-stage">
+          <span class="badge">8</span>
+          <span class="badge sauge">3</span>
+          <span class="badge empty">✓</span>
+        </div>
+      </div>
+
+      <div class="demo">
+        <div class="demo-title">Cases à cocher</div>
+        <div class="demo-stage">
+          <div class="check"></div>
+          <div class="check checked"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="20 6 9 17 4 12"/></svg></div>
+        </div>
+      </div>
+
+      <div class="demo">
+        <div class="demo-title">Avatars (identité couleur)</div>
+        <div class="demo-stage">
+          <div class="avatar toi">B</div>
+          <div class="avatar elle">M</div>
+        </div>
+      </div>
+
+      <div class="demo">
+        <div class="demo-title">Pastilles de fréquence</div>
+        <div class="demo-stage" style="flex-direction:column;align-items:flex-start;gap:8px">
+          <div class="freq"><span class="pip on"></span><span class="pip on"></span><span class="pip on"></span><span class="pip on"></span></div>
+          <div class="freq"><span class="pip on"></span><span class="pip on"></span><span class="pip"></span><span class="pip"></span></div>
+        </div>
+      </div>
+
+      <div class="demo">
+        <div class="demo-title">En-tête de catégorie</div>
+        <div class="demo-stage">
+          <div class="cat-head"><h4>Épicerie</h4><span class="ct">×2</span></div>
+        </div>
+      </div>
+
+      <div class="demo" style="grid-column:1/-1">
+        <div class="demo-title">Champs de saisie</div>
+        <div class="demo-stage">
+          <div class="add-bar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Ajouter un article…</div>
+          <div class="search-bar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>Rechercher un article…</div>
+        </div>
+      </div>
+
+      <div class="demo">
+        <div class="demo-title">Tuile de liste</div>
+        <div class="demo-stage">
+          <div class="tile s1"><div class="tile-row"><div><h3>Auchan</h3><div class="tile-meta">8 articles · maj 12 min</div></div><span class="badge">8</span></div></div>
+        </div>
+      </div>
+
+      <div class="demo">
+        <div class="demo-title">Barre de navigation</div>
+        <div class="demo-stage">
+          <div class="nav-demo">
+            <div class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1.5" fill="currentColor"/><circle cx="3.5" cy="12" r="1.5" fill="currentColor"/><circle cx="3.5" cy="18" r="1.5" fill="currentColor"/></svg>Listes</div>
+            <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></svg>Biblio</div>
+            <div class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/></svg>Profil</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+</div>
+</body>
+</html>

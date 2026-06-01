@@ -1,0 +1,97 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+/*
+  Design System — Sauge & Brique (Riso Print)
+  Source: docs/DESIGN_SYSTEM.md — aucune valeur "à l'œil", on pioche ici.
+  Pas de dark mode (le papier crème domine en permanence).
+*/
+
+@theme inline {
+  /* Mapping des tokens sémantiques shadcn -> variables Riso */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* Tokens couleur Riso explicites (bg-paper, text-ink, border-ink, etc.) */
+  --color-paper: #f0e5d0;
+  --color-paper-light: #fbf4e2;
+  --color-paper-deep: #e5d7bc;
+  --color-ink: #1a1410;
+  --color-ink-soft: #5c4f40;
+  --color-brique: #c5594a;
+  --color-sauge: #7b9e89;
+
+  /* Ombres décalées riso (shadow-riso-*) */
+  --shadow-riso-sauge: 4px 4px 0 #7b9e89;
+  --shadow-riso-brique: 4px 4px 0 #c5594a;
+  --shadow-riso-ink: 4px 4px 0 #1a1410;
+  --shadow-riso-ink-sm: 2px 2px 0 #1a1410;
+  --shadow-riso-ink-lg: 5px 5px 0 #1a1410;
+
+  /* Typographies (variables injectées par next/font dans layout.tsx) */
+  --font-display: var(--font-silkscreen);
+  --font-sans: var(--font-hanken);
+  --font-body: var(--font-hanken);
+  --font-mono: var(--font-jetbrains);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+}
+
+:root {
+  /* Tokens sémantiques shadcn recâblés sur la palette Sauge & Brique */
+  --background: #f0e5d0; /* paper */
+  --foreground: #1a1410; /* ink */
+  --card: #fbf4e2; /* paper-light */
+  --card-foreground: #1a1410;
+  --popover: #f0e5d0;
+  --popover-foreground: #1a1410;
+  --primary: #c5594a; /* brique */
+  --primary-foreground: #fbf4e2; /* paper-light */
+  --secondary: #7b9e89; /* sauge */
+  --secondary-foreground: #1a1410;
+  --muted: #e5d7bc; /* paper-deep */
+  --muted-foreground: #5c4f40; /* ink-soft */
+  --accent: #7b9e89; /* sauge */
+  --accent-foreground: #1a1410;
+  --destructive: #c5594a;
+  --border: #1a1410; /* ink — bordures encrées partout */
+  --input: #1a1410;
+  --ring: #7b9e89; /* sauge */
+  --radius: 0.625rem; /* 10px, dans la plage 8-14px */
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-paper text-ink font-body;
+    /* Trame de demi-tons permanente : points sauge ~13% espacés de 8px */
+    background-image: radial-gradient(
+      circle,
+      rgba(123, 158, 137, 0.13) 1.5px,
+      transparent 1.5px
+    );
+    background-size: 8px 8px;
+  }
+}
