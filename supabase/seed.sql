@@ -1,0 +1,32 @@
+-- ============================================================================
+-- App Couple — Seed local (catégories par défaut)
+-- ----------------------------------------------------------------------------
+-- ⚠️ NON exécuté automatiquement par la migration.
+--
+-- En production, les 12 catégories de départ (PRD §5.2) sont créées pour un
+-- couple via la fonction public.create_default_categories(<couple_id>),
+-- appelée par le code applicatif juste après la création de l'espace couple.
+--
+-- Ce fichier sert uniquement à amorcer un couple de test en local / dev.
+-- Pour l'utiliser : remplace le couple_id ci-dessous par un id réel, puis
+-- exécute ce script manuellement (SQL Editor Supabase ou `supabase db reset`).
+-- ============================================================================
+
+-- Exemple : amorcer les catégories par défaut pour un couple existant.
+-- Remplace l'UUID par celui d'un couple réel avant d'exécuter.
+--
+-- select public.create_default_categories('00000000-0000-0000-0000-000000000000');
+
+-- ----------------------------------------------------------------------------
+-- Variante "tout-en-un" pour un environnement de dev vierge :
+-- crée un couple de démo + ses catégories. À décommenter et adapter au besoin.
+-- ----------------------------------------------------------------------------
+-- do $$
+-- declare
+--   demo_couple uuid;
+-- begin
+--   insert into public.couples (name) values ('Couple démo')
+--   returning id into demo_couple;
+--   perform public.create_default_categories(demo_couple);
+--   raise notice 'Couple démo créé: %', demo_couple;
+-- end $$;
