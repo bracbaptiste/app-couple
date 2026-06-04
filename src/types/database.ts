@@ -286,6 +286,10 @@ export type Database = {
       }
       current_couple_id: { Args: never; Returns: string }
       generate_invite_code: { Args: never; Returns: string }
+      join_couple: {
+        Args: { p_code: string; p_display_name: string }
+        Returns: string
+      }
       join_couple_with_code: { Args: { p_code: string }; Returns: string }
     }
     Enums: {

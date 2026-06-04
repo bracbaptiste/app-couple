@@ -1,0 +1,158 @@
+"use server"
+
+import { redirect } from "next/navigation"
+
+import { createClient } from "@/lib/supabase/server"
+
+/** Couleurs d'identité disponibles (PRD §5.3). */
+const COLORS = ["sauge", "brique"] as const
+type Color = (typeof COLORS)[number]
+
+/**
+ * État renvoyé au formulaire « Créer ». En cas de succès on NE redirige PAS
+ * tout de suite : on renvoie l'`inviteCode` pour que le créateur puisse le
+ * partager avec son/sa partenaire avant de continuer vers les listes.
+ */
+export type CreateState = {
+  error?: string
+  inviteCode?: string
+}
+
+/** État renvoyé au formulaire « Rejoindre » (redirige vers /lists si succès). */
+export type JoinState = {
+  error?: string
+}
+
+/** Borne un prénom : non vide, longueur raisonnable. */
+function normalizeName(raw: unknown): string {
+  return String(raw ?? "").trim().slice(0, 40)
+}
+
+/**
+ * Crée un nouvel espace couple :
+ *   1. insère la ligne `couples` (invite_code généré par défaut côté DB)
+ *   2. complète le profil (display_name, color, couple_id)
+ *   3. crée les catégories de départ
+ * Renvoie l'invite_code (succès) au lieu de rediriger, pour l'afficher.
+ */
+export async function createCouple(
+  _prev: CreateState,
+  formData: FormData,
+): Promise<CreateState> {
+  const displayName = normalizeName(formData.get("display_name"))
+  const color = String(formData.get("color") ?? "") as Color
+
+  if (!displayName) {
+    return { error: "Entre ton prénom." }
+  }
+  if (!COLORS.includes(color)) {
+    return { error: "Choisis une couleur." }
+  }
+
+  const supabase = await createClient()
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) redirect("/login")
+
+  // Garde-fou : un profil déjà rattaché ne refait pas l'onboarding.
+  const { data: existing } = await supabase
+    .from("profiles")
+    .select("couple_id")
+    .eq("id", user.id)
+    .single()
+  if (existing?.couple_id) redirect("/lists")
+
+  // 1. Création du couple. `created_by` satisfait la policy d'INSERT, et
+  //    l'invite_code est généré par le DEFAULT (generate_invite_code()).
+  const { data: couple, error: coupleError } = await supabase
+    .from("couples")
+    .insert({ created_by: user.id })
+    .select("id, invite_code")
+    .single()
+
+  if (coupleError || !couple) {
+    return { error: "Impossible de créer l'espace couple. Réessaie." }
+  }
+
+  // 2. Profil : prénom + couleur choisie + rattachement.
+  const { error: profileError } = await supabase
+    .from("profiles")
+    .update({ display_name: displayName, color, couple_id: couple.id })
+    .eq("id", user.id)
+
+  if (profileError) {
+    return { error: "Espace créé, mais le profil n'a pas pu être complété." }
+  }
+
+  // 3. Catégories de départ (fonction SECURITY DEFINER, garde d'appartenance).
+  const { error: catError } = await supabase.rpc("create_default_categories", {
+    p_couple_id: couple.id,
+  })
+  if (catError) {
+    return { error: "Espace créé, mais les rayons n'ont pas pu être ajoutés." }
+  }
+
+  return { inviteCode: couple.invite_code }
+}
+
+/**
+ * Rejoint un espace existant via son code d'invitation. Toute la logique
+ * (validation du code, cap de 2 membres, couleur restante, rattachement) est
+ * atomique côté DB dans la fonction `join_couple`. On traduit ses exceptions
+ * en messages clairs.
+ */
+export async function joinCouple(
+  _prev: JoinState,
+  formData: FormData,
+): Promise<JoinState> {
+  const code = String(formData.get("invite_code") ?? "").replace(/\D/g, "")
+  const displayName = normalizeName(formData.get("display_name"))
+
+  if (!displayName) {
+    return { error: "Entre ton prénom." }
+  }
+  if (code.length !== 6) {
+    return { error: "Le code d'invitation fait 6 chiffres." }
+  }
+
+  const supabase = await createClient()
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) redirect("/login")
+
+  const { data: existing } = await supabase
+    .from("profiles")
+    .select("couple_id")
+    .eq("id", user.id)
+    .single()
+  if (existing?.couple_id) redirect("/lists")
+
+  const { error } = await supabase.rpc("join_couple", {
+    p_code: code,
+    p_display_name: displayName,
+  })
+
+  if (error) {
+    return { error: messageFromJoinError(error.message) }
+  }
+
+  redirect("/lists")
+}
+
+/** Traduit l'exception SQL de `join_couple` en message utilisateur. */
+function messageFromJoinError(raw: string): string {
+  if (raw.includes("Code invalide")) {
+    return "Ce code d'invitation n'existe pas. Vérifie les 6 chiffres."
+  }
+  if (raw.includes("Couple complet")) {
+    return "Cet espace est déjà complet (2 personnes maximum)."
+  }
+  if (raw.includes("Prénom requis")) {
+    return "Entre ton prénom."
+  }
+  return "Impossible de rejoindre cet espace. Réessaie."
+}
