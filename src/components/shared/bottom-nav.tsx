@@ -20,9 +20,9 @@ export type BottomNavItem = {
 }
 
 const DEFAULT_ITEMS: BottomNavItem[] = [
-  { href: "/listes", label: "Listes", icon: ListChecks },
-  { href: "/bibliotheque", label: "Biblio", icon: LayoutGrid },
-  { href: "/profil", label: "Profil", icon: User },
+  { href: "/lists", label: "Listes", icon: ListChecks },
+  { href: "/library", label: "Biblio", icon: LayoutGrid },
+  { href: "/profile", label: "Profil", icon: User },
 ]
 
 type BottomNavProps = {
