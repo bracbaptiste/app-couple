@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
 
 import { createClient } from "@/lib/supabase/server"
+import { guessCategory } from "@/lib/utils/guess-category"
 
 /** Client Supabase serveur typé (inféré du helper, comme dans lists/actions.ts). */
 type ServerClient = Awaited<ReturnType<typeof createClient>>
@@ -18,6 +19,22 @@ const NOTE_MAX = 200
 /** Borne une chaîne saisie : trim + longueur max. */
 function clamp(raw: unknown, max: number): string {
   return String(raw ?? "").trim().slice(0, max)
+}
+
+/**
+ * Normalise le nom d'un article pour un stockage cohérent :
+ *   - trim + espaces multiples réduits à un seul ;
+ *   - longueur bornée ;
+ *   - casse cohérente (1re lettre majuscule, reste minuscule) → « LESSIVE » et
+ *     « lessive » donnent le même libellé, ce qui fiabilise la déduplication.
+ */
+function normalizeItemName(raw: unknown): string {
+  const collapsed = String(raw ?? "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, NAME_MAX)
+  if (!collapsed) return ""
+  return collapsed.charAt(0).toUpperCase() + collapsed.slice(1).toLowerCase()
 }
 
 /** Échappe les métacaractères LIKE (`%` et `_`) pour une recherche `ilike` exacte. */
@@ -77,26 +94,59 @@ async function assertListOwned(
 /* -------------------------------------------------------------------------- */
 
 /**
- * Ajoute un article à la liste depuis le champ « Ajouter un article… ».
- *
- * Fondations de l'ajout intelligent (l'autocomplétion / suggestions viendront
- * plus tard) :
- *   1. on cherche le produit dans la bibliothèque du couple (insensible à la
- *      casse) ; s'il existe on réutilise son `library_item` (et on incrémente
- *      sa fréquence d'usage), sinon on le crée ;
- *   2. on insère un `list_item` pointant dessus, attribué à l'utilisateur ;
- *   3. si un article identique est déjà présent et non coché, on n'en
- *      recrée pas (la liste reste propre).
- *
- * Signature compatible `useActionState` via `addItem.bind(null, listId)`.
+ * Adaptateur de formulaire — branché sur le champ « Ajouter un article… » via
+ * `addItem.bind(null, listId)` (signature compatible `useActionState`). Délègue
+ * toute la logique à {@link addItemToList}. Le champ « name » est requis ;
+ * « quantity » / « note » sont optionnels (présents si le formulaire les fournit).
  */
 export async function addItem(
   listId: string,
   _prev: ActionResult | null,
   formData: FormData,
 ): Promise<ActionResult> {
-  const name = clamp(formData.get("name"), NAME_MAX)
+  return addItemToList({
+    listId,
+    rawName: String(formData.get("name") ?? ""),
+    quantity: formData.get("quantity") as string | null,
+    note: formData.get("note") as string | null,
+  })
+}
+
+/** Entrées de {@link addItemToList}. */
+export type AddItemInput = {
+  listId: string
+  /** Nom brut saisi (sera normalisé). */
+  rawName: string
+  /** Quantité optionnelle (« 2 kg », « ×3 »…). */
+  quantity?: string | null
+  /** Note optionnelle (« marque préférée »…). */
+  note?: string | null
+}
+
+/**
+ * Ajoute un article à une liste, en alimentant aussi la bibliothèque du couple.
+ *
+ *   1. normalise le nom (trim, espaces, casse cohérente) ;
+ *   2. cherche le produit dans la bibliothèque du couple (insensible à la
+ *      casse) ; s'il existe on réutilise son `library_item`, on incrémente son
+ *      `usage_count` et on rafraîchit `last_used_at` ;
+ *   3. sinon on devine son rayon via {@link guessCategory} (table de mots-clés,
+ *      sans IA en V1) puis on crée le `library_item` rangé dans ce rayon ;
+ *   4. on insère le `list_item` associé (avec quantité / note éventuelles),
+ *      attribué à l'utilisateur ;
+ *   5. déduplication : si un article identique non coché est déjà présent, on
+ *      ne le recrée pas (la liste reste propre).
+ *
+ * Le vidage du champ et l'affichage de l'erreur sont gérés côté client
+ * (`useActionState` + `FormFeedback`).
+ */
+export async function addItemToList(input: AddItemInput): Promise<ActionResult> {
+  const { listId } = input
+  const name = normalizeItemName(input.rawName)
   if (!name) return { ok: false, error: "Entre le nom d’un article." }
+
+  const quantity = clamp(input.quantity, QUANTITY_MAX) || null
+  const note = clamp(input.note, NOTE_MAX) || null
 
   const { supabase, userId, coupleId } = await requireMembership()
 
@@ -104,7 +154,7 @@ export async function addItem(
     return { ok: false, error: "Liste introuvable." }
   }
 
-  // 1. Produit déjà connu du couple ?
+  // 1. Produit déjà connu du couple ? (pas de doublon dans library_items)
   const { data: existing } = await supabase
     .from("library_items")
     .select("id, usage_count")
@@ -124,9 +174,17 @@ export async function addItem(
       })
       .eq("id", existing.id)
   } else {
+    // Nouveau produit : on devine son rayon et on le range si ce rayon existe
+    // chez le couple (sinon `null` = « Sans rayon »).
+    const categoryId = await resolveCategoryId(
+      supabase,
+      coupleId,
+      guessCategory(name),
+    )
+
     const { data: created, error } = await supabase
       .from("library_items")
-      .insert({ couple_id: coupleId, name })
+      .insert({ couple_id: coupleId, name, category_id: categoryId })
       .select("id")
       .single()
 
@@ -154,6 +212,8 @@ export async function addItem(
     list_id: listId,
     library_item_id: libraryItemId,
     added_by: userId,
+    quantity,
+    note,
   })
 
   if (insErr) {
@@ -162,6 +222,25 @@ export async function addItem(
 
   revalidatePath(`/lists/${listId}`)
   return { ok: true }
+}
+
+/**
+ * Résout l'`id` du rayon du couple portant ce nom (insensible à la casse), ou
+ * `null` s'il n'existe pas. Permet de rattacher la catégorie devinée à un rayon
+ * réel — qui a pu être renommé par le couple.
+ */
+async function resolveCategoryId(
+  supabase: ServerClient,
+  coupleId: string,
+  categoryName: string,
+): Promise<string | null> {
+  const { data } = await supabase
+    .from("categories")
+    .select("id")
+    .eq("couple_id", coupleId)
+    .ilike("name", escapeLike(categoryName))
+    .maybeSingle()
+  return data?.id ?? null
 }
 
 /* -------------------------------------------------------------------------- */
