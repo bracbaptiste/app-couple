@@ -5,6 +5,7 @@ import {
   useActionState,
   useEffect,
   useMemo,
+  useOptimistic,
   useRef,
   useState,
   useTransition,
@@ -66,6 +67,9 @@ type ListDetailProps = {
 /** Clé de regroupement pour les articles sans rayon (placés en dernier). */
 const NO_CATEGORY = "__none__"
 
+/** Action interne du réducteur optimiste de cochage. */
+type ToggleOptimistic = { id: string; checked: boolean }
+
 /** Pilote l'écran détail : ajout, regroupement par rayon, section « Déjà pris ». */
 export function ListDetail({
   listId,
@@ -80,8 +84,35 @@ export function ListDetail({
     return map
   }, [members])
 
-  const unchecked = items.filter((i) => !i.isChecked)
-  const checked = items.filter((i) => i.isChecked)
+  // État optimiste du cochage, porté au niveau de la liste pour que l'article
+  // CHANGE DE SECTION immédiatement (rayon ⇄ « Déjà pris »), sans attendre le
+  // serveur. `useOptimistic` réapplique la valeur optimiste tant que la
+  // transition est en cours, puis revient à `items` (donnée serveur) une fois
+  // la Server Action terminée :
+  //   - succès → `revalidatePath` a déjà mis `items` à jour : aucun saut visuel ;
+  //   - échec  → `items` est inchangé : rollback visuel automatique.
+  const [optimisticItems, toggleOptimistic] = useOptimistic(
+    items,
+    (current: ItemView[], { id, checked }: ToggleOptimistic): ItemView[] =>
+      current.map((it) => (it.id === id ? { ...it, isChecked: checked } : it)),
+  )
+  const [isToggling, startToggle] = useTransition()
+  const [toggleError, setToggleError] = useState<string | undefined>()
+
+  function handleToggle(itemId: string, next: boolean) {
+    setToggleError(undefined)
+    startToggle(async () => {
+      // Application optimiste DANS la transition : la section bouge tout de suite.
+      toggleOptimistic({ id: itemId, checked: next })
+      const result = await toggleItem(listId, itemId, next)
+      // Pas de rollback manuel : si `result.ok === false`, la transition se
+      // termine et `useOptimistic` restaure l'état serveur (article non déplacé).
+      if (!result.ok) setToggleError(result.error)
+    })
+  }
+
+  const unchecked = optimisticItems.filter((i) => !i.isChecked)
+  const checked = optimisticItems.filter((i) => i.isChecked)
 
   // Regroupe les non-cochés par rayon, dans l'ordre des catégories
   // (categories.position côté serveur), « Sans rayon » en dernier.
@@ -104,14 +135,23 @@ export function ListDetail({
       ordered.push({ id: NO_CATEGORY, name: "Sans rayon", items: none })
     }
     return ordered
-    // `unchecked` est dérivé d'`items` : on dépend d'`items` et `categories`.
-  }, [items, categories]) // eslint-disable-line react-hooks/exhaustive-deps
+    // `unchecked` est dérivé d'`optimisticItems` : on dépend de lui et `categories`.
+  }, [optimisticItems, categories]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const isEmpty = items.length === 0
+  const isEmpty = optimisticItems.length === 0
 
   return (
     <div className="flex flex-col gap-5">
       <AddItemField listId={listId} />
+
+      {toggleError && (
+        <p
+          role="alert"
+          className="rounded-[8px] border-2 border-brique bg-brique/10 px-3 py-2 text-[12px] font-medium leading-snug text-ink"
+        >
+          {toggleError}
+        </p>
+      )}
 
       {isEmpty ? (
         <p className="rounded-[10px] border-2 border-dashed border-ink bg-paper-light px-4 py-6 text-center text-sm text-ink-soft">
@@ -131,6 +171,8 @@ export function ListDetail({
                     item={item}
                     categories={categories}
                     member={item.addedBy ? membersById.get(item.addedBy) ?? null : null}
+                    onToggle={handleToggle}
+                    toggling={isToggling}
                   />
                 ))}
               </ul>
@@ -145,7 +187,7 @@ export function ListDetail({
 
           {/* Section « Déjà pris » — articles cochés, atténués */}
           {checked.length > 0 && (
-            <section className="flex flex-col gap-2">
+            <section className="flex flex-col gap-2 opacity-80">
               <div className="flex items-center justify-between gap-3 rounded-[6px] border-2 border-dashed border-ink px-3 py-1.5">
                 <h4 className="font-display text-[13px] uppercase leading-none text-ink-soft">
                   Déjà pris
@@ -162,6 +204,8 @@ export function ListDetail({
                     item={item}
                     categories={categories}
                     member={item.addedBy ? membersById.get(item.addedBy) ?? null : null}
+                    onToggle={handleToggle}
+                    toggling={isToggling}
                   />
                 ))}
               </ul>
@@ -248,25 +292,24 @@ function ItemRow({
   item,
   categories,
   member,
+  onToggle,
+  toggling,
 }: {
   listId: string
   item: ItemView
   categories: CategoryView[]
   member: MemberView | null
+  /** Demande le (dé)cochage au parent, qui gère l'état optimiste partagé. */
+  onToggle: (itemId: string, next: boolean) => void
+  /** Une transition de cochage est en cours quelque part dans la liste. */
+  toggling: boolean
 }) {
   const [isPending, startTransition] = useTransition()
   const [mode, setMode] = useState<ItemMode>(null)
   const [error, setError] = useState<string | undefined>()
-  // État optimiste de cochage : la case répond immédiatement au tap.
-  const [checked, setChecked] = useState(item.isChecked)
-
-  // Resynchronise pendant le rendu si le serveur renvoie un état différent
-  // (revalidation) — pattern React « ajuster l'état quand une prop change ».
-  const [serverChecked, setServerChecked] = useState(item.isChecked)
-  if (serverChecked !== item.isChecked) {
-    setServerChecked(item.isChecked)
-    setChecked(item.isChecked)
-  }
+  // Le cochage est piloté par le parent (état optimiste partagé) : on lit
+  // directement `item.isChecked`, qui reflète déjà la valeur optimiste.
+  const checked = item.isChecked
 
   function run(action: () => Promise<ActionResult>, onSuccess?: () => void) {
     setError(undefined)
@@ -274,18 +317,6 @@ function ItemRow({
       const result = await action()
       if (!result.ok) setError(result.error)
       else onSuccess?.()
-    })
-  }
-
-  function onToggle(next: boolean) {
-    setChecked(next) // optimiste
-    setError(undefined)
-    startTransition(async () => {
-      const result = await toggleItem(listId, item.id, next)
-      if (!result.ok) {
-        setChecked(!next) // rollback
-        setError(result.error)
-      }
     })
   }
 
@@ -299,8 +330,10 @@ function ItemRow({
       <div className="flex items-center gap-1">
         <RisoCheckbox
           checked={checked}
-          onCheckedChange={onToggle}
-          disabled={isPending}
+          onCheckedChange={(next) => onToggle(item.id, next)}
+          // On ne bloque pas la case pendant la transition : le cochage /
+          // décochage rapide reste possible (chaque tap relance l'optimiste).
+          aria-busy={toggling}
           aria-label={checked ? `Décocher ${item.name}` : `Cocher ${item.name}`}
         />
 
