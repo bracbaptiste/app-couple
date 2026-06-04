@@ -46,7 +46,27 @@
       "Bash(git config *)",
       "Bash(git reset *)",
       "Bash(git restore *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000/list-preview)",
+      "Bash(curl -s http://localhost:3000/list-preview)",
+      "Bash(curl -s -D - -o /dev/null \"http://localhost:3000/list-preview\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" \"http://localhost:3000/design-test\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" \"http://localhost:3000/design-test/list-preview\")",
+      "Bash(curl -s \"http://localhost:3000/design-test/list-preview\")",
+      "mcp__Claude_in_Chrome__list_connected_browsers",
+      "Bash(python3 -)",
+      "Bash(node -)",
+      "Bash(rm -f preview_tmp.html)",
+      "Bash(npx tsx *)",
+      "Bash(cd \"C:\\\\Users\\\\bapti\\\\OneDrive\\\\Bureau\\\\dossier pour Claude\\\\Appli couple\" && git commit --amend -F .git/COMMIT_MSG_TMP.txt && rm .git/COMMIT_MSG_TMP.txt && echo \"---\" && git log -1 --format='%s')",
+      "Bash(node -e \"const p=require\\('./package.json'\\);console.log\\('next',p.dependencies.next\\);console.log\\('react',p.dependencies.react\\)\")",
+      "PowerShell(npx tsc --noEmit -p tsconfig.json 2>&1)",
+      "Bash(ls src/app)",
+      "Bash(ls app *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code} -> %{redirect_url}\\\\n\" http://localhost:61455/library)",
+      "Bash(curl -s --max-time 60 -o /dev/null -w \"HTTP %{http_code} -> %{redirect_url}\\\\n\" \"http://localhost:3001/library\")",
+      "Bash(curl -s --max-time 60 -o /dev/null -w \"HTTP %{http_code} -> %{redirect_url}\\\\n\" \"http://localhost:3000/library\")"
     ]
   }
 }
