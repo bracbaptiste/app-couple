@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
 
 import { createClient } from "@/lib/supabase/server"
+import { guessCategory } from "@/lib/utils/guess-category"
 import { normalizeItemName } from "@/lib/utils/normalize-item-name"
 
 /** Client Supabase serveur typé (inféré du helper, comme dans lists/actions.ts). */
@@ -57,6 +58,86 @@ async function getOwnedLibraryItem(
     .eq("couple_id", coupleId)
     .maybeSingle()
   return data ?? null
+}
+
+/** Échappe les métacaractères LIKE (`%` et `_`) pour une recherche `ilike` exacte. */
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (m) => `\\${m}`)
+}
+
+/**
+ * Résout l'`id` du rayon du couple portant ce nom (insensible à la casse), ou
+ * `null` s'il n'existe pas. Permet de ranger un nouveau produit dans le rayon
+ * deviné, tel qu'il a pu être renommé par le couple.
+ */
+async function resolveCategoryId(
+  supabase: ServerClient,
+  coupleId: string,
+  categoryName: string,
+): Promise<string | null> {
+  const { data } = await supabase
+    .from("categories")
+    .select("id")
+    .eq("couple_id", coupleId)
+    .ilike("name", escapeLike(categoryName))
+    .maybeSingle()
+  return data?.id ?? null
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Ajouter un produit directement à la bibliothèque                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Crée un produit dans la bibliothèque du couple sans passer par une liste.
+ *
+ *   1. normalise le nom (trim, espaces, casse cohérente) ;
+ *   2. no-op silencieux si le produit existe déjà (insensible à la casse) — on
+ *      ne crée pas de doublon et on n'affiche pas d'erreur bloquante ;
+ *   3. sinon on devine son rayon via {@link guessCategory} et on l'y range.
+ *
+ * Le produit naît avec `usage_count = 0` (réglage par défaut côté base) : il
+ * apparaît dans la Bibliothèque mais reste « Rare » tant qu'on ne l'a pas envoyé
+ * vers une liste.
+ */
+export async function addLibraryItem(rawName: string): Promise<ActionResult> {
+  const name = normalizeItemName(rawName)
+  if (!name) return { ok: false, error: "Entre le nom d’un article." }
+
+  const { supabase, coupleId } = await requireMembership()
+
+  // Déjà connu du couple ? On ne duplique pas (contrainte unique couple_id+name).
+  const { data: existing } = await supabase
+    .from("library_items")
+    .select("id")
+    .eq("couple_id", coupleId)
+    .ilike("name", escapeLike(name))
+    .maybeSingle()
+
+  if (existing) {
+    return { ok: false, error: `« ${name} » est déjà dans ta bibliothèque.` }
+  }
+
+  const categoryId = await resolveCategoryId(
+    supabase,
+    coupleId,
+    guessCategory(name),
+  )
+
+  const { error } = await supabase
+    .from("library_items")
+    .insert({ couple_id: coupleId, name, category_id: categoryId })
+
+  if (error) {
+    // 23505 = violation d'unicité (course entre deux ajouts simultanés).
+    if (error.code === "23505") {
+      return { ok: false, error: `« ${name} » est déjà dans ta bibliothèque.` }
+    }
+    return { ok: false, error: "Impossible d’ajouter l’article. Réessaie." }
+  }
+
+  revalidatePath("/library")
+  return { ok: true }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -124,6 +205,94 @@ export async function sendToList(
     })
     .eq("id", libraryItemId)
     .eq("couple_id", coupleId)
+
+  revalidatePath("/library")
+  revalidatePath(`/lists/${listId}`)
+  return { ok: true }
+}
+
+/**
+ * Envoie PLUSIEURS produits sélectionnés vers une même liste en un geste (cœur
+ * du flux « je coche mes articles dans la Bibliothèque puis j'exporte tout »).
+ *
+ *   1. vérifie que la liste appartient au couple courant ;
+ *   2. ne retient que les produits réellement possédés par le couple (borne les
+ *      ids reçus du client, double la RLS) ;
+ *   3. pour chacun : déduplication (pas de doublon non coché) + insertion du
+ *      `list_item`, puis renforcement de sa fréquence d'usage.
+ *
+ * On revalide une seule fois à la fin. Un id inconnu est ignoré silencieusement
+ * plutôt que de faire échouer tout le lot.
+ */
+export async function sendManyToList(
+  libraryItemIds: string[],
+  listId: string,
+): Promise<ActionResult> {
+  if (libraryItemIds.length === 0) {
+    return { ok: false, error: "Sélectionne au moins un article." }
+  }
+
+  const { supabase, userId, coupleId } = await requireMembership()
+
+  // La liste doit appartenir au couple courant (borne le list_id du client).
+  const { data: list } = await supabase
+    .from("lists")
+    .select("id")
+    .eq("id", listId)
+    .eq("couple_id", coupleId)
+    .maybeSingle()
+  if (!list) return { ok: false, error: "Liste introuvable." }
+
+  // Ne garder que les produits réellement possédés (borne les ids du client).
+  const { data: owned } = await supabase
+    .from("library_items")
+    .select("id, usage_count")
+    .eq("couple_id", coupleId)
+    .in("id", libraryItemIds)
+
+  if (!owned || owned.length === 0) {
+    return { ok: false, error: "Articles introuvables." }
+  }
+
+  // Articles déjà présents non cochés dans la liste : on ne les duplique pas.
+  const { data: present } = await supabase
+    .from("list_items")
+    .select("library_item_id")
+    .eq("list_id", listId)
+    .eq("is_checked", false)
+    .in(
+      "library_item_id",
+      owned.map((p) => p.id),
+    )
+  const alreadyThere = new Set((present ?? []).map((r) => r.library_item_id))
+
+  const toInsert = owned
+    .filter((p) => !alreadyThere.has(p.id))
+    .map((p) => ({
+      list_id: listId,
+      library_item_id: p.id,
+      added_by: userId,
+    }))
+
+  if (toInsert.length > 0) {
+    const { error: insErr } = await supabase.from("list_items").insert(toInsert)
+    if (insErr) {
+      return { ok: false, error: "Impossible d’envoyer les articles. Réessaie." }
+    }
+  }
+
+  // Renforce la fréquence d'usage de tous les produits envoyés (doublon compris :
+  // renvoyer un article reste un signal d'usage).
+  const now = new Date().toISOString()
+  await Promise.all(
+    owned.map((p) =>
+      supabase
+        .from("library_items")
+        .update({ usage_count: p.usage_count + 1, last_used_at: now })
+        .eq("id", p.id)
+        .eq("couple_id", coupleId),
+    ),
+  )
 
   revalidatePath("/library")
   revalidatePath(`/lists/${listId}`)

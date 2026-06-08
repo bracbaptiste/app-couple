@@ -1,5 +1,6 @@
 "use client"
 
+import { Trash2 } from "lucide-react"
 import {
   useActionState,
   useEffect,
@@ -187,7 +188,8 @@ function CategoriesSection({ categories }: { categories: CategoryView[] }) {
         Rayons du couple
       </h2>
       <p className="mb-5 text-[12px] leading-snug text-ink-soft">
-        Renomme, réordonne, ajoute ou supprime les rayons partagés.
+        Touche un nom pour le renommer · flèches pour réordonner · 🗑 pour
+        supprimer.
       </p>
 
       <ul className="mb-5 flex flex-col gap-2.5">
@@ -251,6 +253,9 @@ function CategoryRow({
   const [error, setError] = useState<string | undefined>()
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [replacementId, setReplacementId] = useState("")
+  // Évite un double enregistrement : Échap (annulation) déclenche aussi le blur,
+  // ce drapeau dit au `commit` du blur de ne rien faire dans ce cas.
+  const skipCommit = useRef(false)
 
   function run(action: () => Promise<ActionResult>) {
     setError(undefined)
@@ -262,6 +267,30 @@ function CategoryRow({
         setConfirmingDelete(false)
       }
     })
+  }
+
+  /** Valide le renommage (Entrée ou perte de focus). No-op si vide / inchangé. */
+  function commit() {
+    if (skipCommit.current) {
+      skipCommit.current = false
+      return
+    }
+    const trimmed = name.trim()
+    if (trimmed === "" || trimmed === category.name) {
+      setName(category.name)
+      setEditing(false)
+      setError(undefined)
+      return
+    }
+    run(() => renameCategory(category.id, name))
+  }
+
+  /** Annule l'édition (Échap) et restaure le nom courant sans appel serveur. */
+  function cancel() {
+    skipCommit.current = true
+    setName(category.name)
+    setEditing(false)
+    setError(undefined)
   }
 
   const otherCategories = categories.filter((c) => c.id !== category.id)
@@ -287,17 +316,38 @@ function CategoryRow({
           </ArrowButton>
         </div>
 
-        {/* Nom (lecture ou édition) */}
+        {/* Nom : touche-le pour l'éditer directement (pas de bouton Renommer).
+            Entrée / clic ailleurs enregistre, Échap annule. */}
         {editing ? (
           <RisoInput
             value={name}
             onChange={(e) => setName(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault()
+                e.currentTarget.blur()
+              } else if (e.key === "Escape") {
+                e.preventDefault()
+                cancel()
+              }
+            }}
             maxLength={30}
+            aria-label={`Renommer ${category.name}`}
             className="h-10 flex-1"
             autoFocus
           />
         ) : (
-          <div className="flex-1">
+          <button
+            type="button"
+            disabled={isPending}
+            onClick={() => {
+              setConfirmingDelete(false)
+              setEditing(true)
+            }}
+            aria-label={`Renommer ${category.name}`}
+            className="flex-1 rounded-[6px] text-left outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper disabled:opacity-50"
+          >
             <p className="font-display text-[15px] uppercase leading-tight text-ink">
               {category.name}
             </p>
@@ -308,51 +358,21 @@ function CategoryRow({
                   }`
                 : "vide"}
             </p>
-          </div>
+          </button>
         )}
 
-        {/* Actions */}
-        {editing ? (
-          <div className="flex gap-1.5">
-            <RisoButton
-              size="sm"
-              disabled={isPending}
-              onClick={() => run(() => renameCategory(category.id, name))}
-            >
-              OK
-            </RisoButton>
-            <RisoButton
-              variant="ghost"
-              size="sm"
-              disabled={isPending}
-              onClick={() => {
-                setName(category.name)
-                setEditing(false)
-                setError(undefined)
-              }}
-            >
-              Annuler
-            </RisoButton>
-          </div>
-        ) : (
-          <div className="flex gap-1.5">
-            <RisoButton
-              variant="secondary"
-              size="sm"
-              disabled={isPending}
-              onClick={() => setEditing(true)}
-            >
-              Renommer
-            </RisoButton>
-            <RisoButton
-              variant="ghost"
-              size="sm"
-              disabled={isPending}
-              onClick={() => setConfirmingDelete((v) => !v)}
-            >
-              Suppr.
-            </RisoButton>
-          </div>
+        {/* Suppression : petite poubelle (masquée pendant l'édition du nom). */}
+        {!editing && (
+          <button
+            type="button"
+            aria-label={`Supprimer le rayon ${category.name}`}
+            aria-expanded={confirmingDelete}
+            disabled={isPending}
+            onClick={() => setConfirmingDelete((v) => !v)}
+            className="inline-flex size-11 shrink-0 items-center justify-center rounded-[8px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-brique focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px disabled:opacity-50"
+          >
+            <Trash2 className="size-5" strokeWidth={2.5} aria-hidden />
+          </button>
         )}
       </div>
 

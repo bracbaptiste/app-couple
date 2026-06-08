@@ -1,18 +1,29 @@
 "use client"
 
-import { Search, Plus, Pencil, Trash2, Check } from "lucide-react"
-import { useEffect, useMemo, useRef, useState, useTransition } from "react"
+import { Search, Plus, Trash2, Check, X } from "lucide-react"
+import {
+  useActionState,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react"
+import { useFormStatus } from "react-dom"
 
 import { CategoryHeader } from "@/components/ui/category-header"
 import { RisoButton } from "@/components/ui/riso-button"
+import { RisoCheckbox } from "@/components/ui/riso-checkbox"
 import { cn } from "@/lib/utils"
 import { useRealtimeLibrary } from "@/lib/realtime"
 import { useOfflineCache } from "@/lib/offline/use-offline-cache"
+import { FormFeedback } from "@/app/(auth)/form-ui"
 
 import {
+  addLibraryItem,
   deleteLibraryItem,
   renameLibraryItem,
-  sendToList,
+  sendManyToList,
   type ActionResult,
 } from "./actions"
 
@@ -60,8 +71,10 @@ function normalize(value: string): string {
 }
 
 /**
- * Pilote la Bibliothèque : barre de recherche, groupes par rayon, pastilles de
- * fréquence, et les deux actions par produit (envoyer vers une liste / supprimer).
+ * Pilote la Bibliothèque : ajout d'un article, barre de recherche, groupes par
+ * rayon, pastilles de fréquence. Le flux principal est la SÉLECTION MULTIPLE :
+ * on coche plusieurs produits puis un bouton unique les envoie tous vers une
+ * liste. Chaque produit garde aussi ses actions individuelles (renommer / supprimer).
  */
 export function LibraryBrowser({
   groups,
@@ -82,8 +95,35 @@ export function LibraryBrowser({
   useOfflineCache("library", { groups, lists, total })
 
   const [query, setQuery] = useState("")
-  // Produit dont la feuille « Envoyer vers… » est ouverte (un seul à la fois).
-  const [sending, setSending] = useState<LibraryItemView | null>(null)
+  // Produits cochés pour l'export groupé (par id, survit au filtrage).
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  // Ouvre la feuille « Envoyer vers… » pour la sélection courante.
+  const [sheetOpen, setSheetOpen] = useState(false)
+
+  // Ensemble des ids de produits encore présents (pour ignorer une sélection
+  // devenue fantôme : produit supprimé / renommé côté partenaire).
+  const liveIds = useMemo(() => {
+    const set = new Set<string>()
+    for (const g of groups) for (const it of g.items) set.add(it.id)
+    return set
+  }, [groups])
+
+  // Sélection effective = ce qui est coché ET toujours présent. On ne purge pas
+  // l'état (pas de setState en effet) : on dérive, ce qui suffit à l'envoi et au
+  // décompte. Les ids fantômes sont aussi bornés côté serveur (sendManyToList).
+  const selectedIds = useMemo(
+    () => [...selected].filter((id) => liveIds.has(id)),
+    [selected, liveIds],
+  )
+
+  function toggleSelect(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   // Filtre les produits par nom (le tri/regroupement reste celui du serveur).
   const filtered = useMemo(() => {
@@ -98,15 +138,18 @@ export function LibraryBrowser({
   }, [groups, query])
 
   const hasResults = filtered.some((g) => g.items.length > 0)
+  const selectedCount = selectedIds.length
 
   return (
     <div className="flex flex-col gap-5">
+      <AddLibraryItemField />
+
       <SearchBar value={query} onChange={setQuery} />
 
       {total === 0 ? (
         <p className="rounded-[10px] border-2 border-dashed border-ink bg-paper-light px-4 py-6 text-center text-sm text-ink-soft">
-          Ta bibliothèque est vide. Les articles ajoutés à tes listes s’y
-          rangent automatiquement.
+          Ta bibliothèque est vide. Ajoute un article ci-dessus, ou il s’y rangera
+          automatiquement dès que tu en mets un dans une liste.
         </p>
       ) : !hasResults ? (
         <p className="rounded-[10px] border-2 border-dashed border-ink bg-paper-light px-4 py-6 text-center text-sm text-ink-soft">
@@ -121,8 +164,8 @@ export function LibraryBrowser({
                 <LibraryRow
                   key={item.id}
                   item={item}
-                  hasLists={lists.length > 0}
-                  onSend={() => setSending(item)}
+                  selected={selected.has(item.id)}
+                  onToggleSelect={() => toggleSelect(item.id)}
                 />
               ))}
             </ul>
@@ -130,14 +173,106 @@ export function LibraryBrowser({
         ))
       )}
 
-      {sending && (
+      {/* Espace pour que la dernière ligne ne soit pas masquée par la barre. */}
+      {selectedCount > 0 && <div aria-hidden className="h-16" />}
+
+      {selectedCount > 0 && (
+        <SelectionBar
+          count={selectedCount}
+          hasLists={lists.length > 0}
+          onSend={() => setSheetOpen(true)}
+          onClear={() => setSelected(new Set())}
+        />
+      )}
+
+      {sheetOpen && (
         <SendSheet
-          item={sending}
+          itemIds={selectedIds}
+          count={selectedCount}
           lists={lists}
-          onClose={() => setSending(null)}
+          onClose={() => setSheetOpen(false)}
+          onDone={() => {
+            setSheetOpen(false)
+            setSelected(new Set())
+          }}
         />
       )}
     </div>
+  )
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Ajouter un article à la bibliothèque                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Champ d'ajout direct d'un produit à la bibliothèque (sans passer par une
+ * liste). Même grammaire visuelle que le champ « Ajouter un article… » du détail
+ * de liste : conteneur sauge, icône +, bouton OK. Le champ se vide et garde le
+ * focus après un ajout réussi (saisie en rafale).
+ */
+function AddLibraryItemField() {
+  const action = async (
+    _prev: ActionResult | null,
+    formData: FormData,
+  ): Promise<ActionResult> => addLibraryItem(String(formData.get("name") ?? ""))
+
+  const [state, formAction] = useActionState<ActionResult | null, FormData>(
+    action,
+    null,
+  )
+  const formRef = useRef<HTMLFormElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (state?.ok) {
+      formRef.current?.reset()
+      inputRef.current?.focus()
+    }
+  }, [state])
+
+  const error = state && !state.ok ? state.error : undefined
+
+  return (
+    <div className="flex flex-col gap-2">
+      <form ref={formRef} action={formAction}>
+        <div className="flex items-center gap-2 rounded-[10px] border-2 border-ink bg-sauge px-3 shadow-riso-ink focus-within:shadow-riso-brique">
+          <Plus className="size-5 shrink-0 text-ink" strokeWidth={2.5} aria-hidden />
+          <input
+            ref={inputRef}
+            name="name"
+            type="text"
+            inputMode="text"
+            autoComplete="off"
+            placeholder="Ajouter un article à la bibliothèque…"
+            maxLength={60}
+            required
+            aria-label="Ajouter un article à la bibliothèque"
+            className="h-12 w-full bg-transparent text-base font-medium text-ink outline-none placeholder:font-body placeholder:text-ink/55"
+          />
+          <SubmitAdd />
+        </div>
+      </form>
+      <FormFeedback error={error} />
+    </div>
+  )
+}
+
+/** Bouton « OK » d'ajout : désactivé + libellé d'attente pendant l'envoi. */
+function SubmitAdd() {
+  const { pending } = useFormStatus()
+  return (
+    <RisoButton
+      type="submit"
+      size="sm"
+      variant="primary"
+      disabled={pending}
+      aria-busy={pending}
+      className="shrink-0"
+      aria-label="Ajouter"
+    >
+      {pending ? "…" : "OK"}
+    </RisoButton>
   )
 }
 
@@ -206,17 +341,21 @@ function FrequencyDots({ frequency }: { frequency: Frequency }) {
 
 function LibraryRow({
   item,
-  hasLists,
-  onSend,
+  selected,
+  onToggleSelect,
 }: {
   item: LibraryItemView
-  hasLists: boolean
-  onSend: () => void
+  selected: boolean
+  onToggleSelect: () => void
 }) {
   const [isPending, startTransition] = useTransition()
   // Un seul panneau ouvert à la fois sous la ligne : édition OU suppression.
   const [mode, setMode] = useState<null | "edit" | "delete">(null)
+  const [name, setName] = useState(item.name)
   const [error, setError] = useState<string | undefined>()
+  // Évite un double enregistrement : Échap (annulation) déclenche aussi le blur,
+  // ce drapeau dit au `commit` du blur de ne rien faire dans ce cas.
+  const skipCommit = useRef(false)
 
   function run(action: () => Promise<ActionResult>, onSuccess?: () => void) {
     setError(undefined)
@@ -227,82 +366,115 @@ function LibraryRow({
     })
   }
 
+  /** Valide le renommage (Entrée ou perte de focus). No-op si vide / inchangé. */
+  function commit() {
+    if (skipCommit.current) {
+      skipCommit.current = false
+      return
+    }
+    const trimmed = name.trim()
+    if (trimmed === "" || trimmed === item.name) {
+      setName(item.name)
+      setMode(null)
+      setError(undefined)
+      return
+    }
+    run(
+      () => renameLibraryItem(item.id, name),
+      () => setMode(null),
+    )
+  }
+
+  /** Annule l'édition (Échap) et restaure le nom courant sans appel serveur. */
+  function cancel() {
+    skipCommit.current = true
+    setName(item.name)
+    setMode(null)
+    setError(undefined)
+  }
+
+  const editing = mode === "edit"
+
   return (
-    <li className="rounded-[10px] border-2 border-ink bg-paper-light p-2.5">
-      <div className="flex items-center gap-2.5">
-        <FrequencyDots frequency={item.frequency} />
-
-        {/* Nom + nombre d'usages */}
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-[15px] font-medium leading-tight text-ink">
-            {item.name}
-          </p>
-          <p className="font-mono text-[11px] text-ink-soft">
-            {FREQUENCY_LABEL[item.frequency]} · {item.usageCount} usage
-            {item.usageCount > 1 ? "s" : ""}
-          </p>
-        </div>
-
-        {/* Envoyer vers une liste */}
-        <RisoButton
-          size="sm"
-          variant="secondary"
-          disabled={isPending || !hasLists}
-          onClick={onSend}
-          aria-label={`Envoyer ${item.name} vers une liste`}
-          title={hasLists ? undefined : "Crée d’abord une liste"}
-        >
-          <Plus aria-hidden /> Ajouter
-        </RisoButton>
-
-        {/* Modifier le nom */}
-        <button
-          type="button"
-          aria-label={`Modifier ${item.name}`}
-          aria-expanded={mode === "edit"}
-          disabled={isPending}
-          onClick={() => {
-            setMode((m) => (m === "edit" ? null : "edit"))
-            setError(undefined)
-          }}
-          className="inline-flex size-11 shrink-0 items-center justify-center rounded-[8px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px disabled:opacity-50"
-        >
-          <Pencil className="size-5" strokeWidth={2.5} aria-hidden />
-        </button>
-
-        {/* Supprimer */}
-        <button
-          type="button"
-          aria-label={`Supprimer ${item.name}`}
-          aria-expanded={mode === "delete"}
-          disabled={isPending}
-          onClick={() => {
-            setMode((m) => (m === "delete" ? null : "delete"))
-            setError(undefined)
-          }}
-          className="inline-flex size-11 shrink-0 items-center justify-center rounded-[8px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-brique focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px disabled:opacity-50"
-        >
-          <Trash2 className="size-5" strokeWidth={2.5} aria-hidden />
-        </button>
-      </div>
-
-      {/* Édition du nom (corrige une faute → répercutée sur toutes les listes) */}
-      {mode === "edit" && (
-        <RenameForm
-          item={item}
-          disabled={isPending}
-          onCancel={() => {
-            setMode(null)
-            setError(undefined)
-          }}
-          onSave={(name) =>
-            run(
-              () => renameLibraryItem(item.id, name),
-              () => setMode(null),
-            )
+    <li
+      className={cn(
+        "rounded-[10px] border-2 border-ink p-2.5 transition-colors",
+        selected ? "bg-sauge/40" : "bg-paper-light",
+      )}
+    >
+      <div className="flex items-center gap-1.5">
+        {/* Case de sélection pour l'export groupé */}
+        <RisoCheckbox
+          checked={selected}
+          onCheckedChange={onToggleSelect}
+          aria-label={
+            selected ? `Désélectionner ${item.name}` : `Sélectionner ${item.name}`
           }
         />
-      )}
+
+        <FrequencyDots frequency={item.frequency} />
+
+        {/* Nom : touche-le pour le renommer directement (pas de bouton crayon).
+            Entrée / clic ailleurs enregistre, Échap annule. La correction se
+            répercute sur toutes les listes contenant l'article. */}
+        {editing ? (
+          <input
+            value={name}
+            disabled={isPending}
+            onChange={(e) => setName(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault()
+                e.currentTarget.blur()
+              } else if (e.key === "Escape") {
+                e.preventDefault()
+                cancel()
+              }
+            }}
+            maxLength={60}
+            aria-label={`Renommer ${item.name}`}
+            autoFocus
+            className="h-10 min-w-0 flex-1 rounded-[8px] border-2 border-ink bg-paper-light px-2.5 text-[15px] font-medium text-ink outline-none focus-visible:shadow-riso-sauge"
+          />
+        ) : (
+          <button
+            type="button"
+            disabled={isPending}
+            onClick={() => {
+              setMode("edit")
+              setError(undefined)
+            }}
+            aria-label={`Renommer ${item.name}`}
+            className="min-w-0 flex-1 rounded-[6px] text-left outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper disabled:opacity-50"
+          >
+            <p className="truncate text-[15px] font-medium leading-tight text-ink">
+              {item.name}
+            </p>
+            <p className="font-mono text-[11px] text-ink-soft">
+              {FREQUENCY_LABEL[item.frequency]} · {item.usageCount} usage
+              {item.usageCount > 1 ? "s" : ""}
+            </p>
+          </button>
+        )}
+
+        {/* Supprimer (masqué pendant l'édition du nom) */}
+        {!editing && (
+          <button
+            type="button"
+            aria-label={`Supprimer ${item.name}`}
+            aria-expanded={mode === "delete"}
+            disabled={isPending}
+            onClick={() => {
+              setMode((m) => (m === "delete" ? null : "delete"))
+              setError(undefined)
+            }}
+            className="inline-flex size-11 shrink-0 items-center justify-center rounded-[8px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-brique focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px disabled:opacity-50"
+          >
+            <Trash2 className="size-5" strokeWidth={2.5} aria-hidden />
+          </button>
+        )}
+      </div>
 
       {/* Confirmation de suppression */}
       {mode === "delete" && (
@@ -352,81 +524,48 @@ function LibraryRow({
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Formulaire de renommage inline                                             */
+/*  Barre d'action de sélection (contextuelle, ancrée en bas)                  */
 /* -------------------------------------------------------------------------- */
 
 /**
- * Champ d'édition du nom d'un produit, déplié sous la ligne. Pré-rempli avec le
- * nom courant et focus automatique. Entrée = enregistrer, Échap = annuler.
+ * Barre contextuelle visible dès qu'au moins un produit est coché. Elle recouvre
+ * la BottomNav le temps de la sélection (pattern « action bar » mobile) : un
+ * bouton unique envoie toute la sélection vers une liste, une croix l'efface.
  */
-function RenameForm({
-  item,
-  disabled,
-  onCancel,
-  onSave,
+function SelectionBar({
+  count,
+  hasLists,
+  onSend,
+  onClear,
 }: {
-  item: LibraryItemView
-  disabled: boolean
-  onCancel: () => void
-  onSave: (name: string) => void
+  count: number
+  hasLists: boolean
+  onSend: () => void
+  onClear: () => void
 }) {
-  const [name, setName] = useState(item.name)
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  // Focus + sélection à l'ouverture (correction rapide d'une faute).
-  useEffect(() => {
-    const el = inputRef.current
-    if (el) {
-      el.focus()
-      el.select()
-    }
-  }, [])
-
-  const trimmed = name.trim()
-  // Désactive l'enregistrement si vide ou identique au nom courant.
-  const unchanged = trimmed === "" || trimmed === item.name
-
-  function submit() {
-    if (disabled || unchanged) return
-    onSave(name)
-  }
-
   return (
-    <div className="mt-2 flex flex-col gap-2 border-t-2 border-dashed border-ink pt-2">
-      <label className="font-mono text-[11px] font-bold uppercase tracking-wide text-ink-soft">
-        Nom de l’article
-      </label>
-      <input
-        ref={inputRef}
-        value={name}
-        disabled={disabled}
-        onChange={(e) => setName(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault()
-            submit()
-          } else if (e.key === "Escape") {
-            e.preventDefault()
-            onCancel()
-          }
-        }}
-        maxLength={60}
-        aria-label={`Nouveau nom pour ${item.name}`}
-        className="h-11 w-full rounded-[8px] border-2 border-ink bg-paper-light px-3 text-base text-ink outline-none placeholder:text-ink-soft/60 focus-visible:shadow-riso-sauge"
-      />
-      <p className="font-mono text-[11px] leading-snug text-ink-soft">
-        La correction s’applique à toutes les listes contenant cet article.
-      </p>
-      <div className="flex gap-1.5">
+    <div className="fixed inset-x-0 bottom-0 z-50 border-t-[2.5px] border-ink bg-paper-light px-3 pt-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] shadow-riso-ink">
+      <div className="mx-auto flex w-full max-w-sm items-center gap-2">
+        <button
+          type="button"
+          onClick={onClear}
+          aria-label="Effacer la sélection"
+          className="inline-flex size-11 shrink-0 items-center justify-center rounded-[8px] border-2 border-ink bg-paper-light text-ink outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px"
+        >
+          <X className="size-5" strokeWidth={2.5} aria-hidden />
+        </button>
+        <span className="font-mono text-[12px] font-bold text-ink">
+          {count} sélectionné{count > 1 ? "s" : ""}
+        </span>
         <RisoButton
           size="sm"
-          disabled={disabled || unchanged}
-          onClick={submit}
+          variant="primary"
+          disabled={!hasLists}
+          onClick={onSend}
+          title={hasLists ? undefined : "Crée d’abord une liste"}
+          className="ml-auto"
         >
-          Enregistrer
-        </RisoButton>
-        <RisoButton variant="ghost" size="sm" disabled={disabled} onClick={onCancel}>
-          Annuler
+          <Plus aria-hidden /> Ajouter à une liste
         </RisoButton>
       </div>
     </div>
@@ -439,17 +578,21 @@ function RenameForm({
 
 /**
  * Bottom-sheet mobile listant les listes du couple. Sélectionner une liste y
- * crée le `list_item` et renforce la fréquence du produit ; la feuille se ferme
- * sur succès. Échec → message d'erreur in-situ, la feuille reste ouverte.
+ * envoie TOUS les produits cochés (un seul geste), renforce leur fréquence, puis
+ * referme la feuille et vide la sélection. Échec → message d'erreur in-situ.
  */
 function SendSheet({
-  item,
+  itemIds,
+  count,
   lists,
   onClose,
+  onDone,
 }: {
-  item: LibraryItemView
+  itemIds: string[]
+  count: number
   lists: ListChoice[]
   onClose: () => void
+  onDone: () => void
 }) {
   const [isPending, startTransition] = useTransition()
   const [error, setError] = useState<string | undefined>()
@@ -472,14 +615,14 @@ function SendSheet({
   function pick(listId: string) {
     setError(undefined)
     startTransition(async () => {
-      const result = await sendToList(item.id, listId)
+      const result = await sendManyToList(itemIds, listId)
       if (!result.ok) {
         setError(result.error)
         return
       }
-      // Coche brièvement la liste choisie, puis referme la feuille.
+      // Coche brièvement la liste choisie, puis referme + vide la sélection.
       setDoneListId(listId)
-      setTimeout(onClose, 600)
+      setTimeout(onDone, 600)
     })
   }
 
@@ -488,7 +631,7 @@ function SendSheet({
       className="fixed inset-0 z-50 flex items-end justify-center"
       role="dialog"
       aria-modal="true"
-      aria-label={`Envoyer ${item.name} vers une liste`}
+      aria-label="Envoyer la sélection vers une liste"
     >
       {/* Voile : ferme au tap. */}
       <button
@@ -506,7 +649,7 @@ function SendSheet({
               Envoyer vers quelle liste ?
             </h3>
             <p className="mt-1 truncate font-mono text-[11px] text-ink-soft">
-              {item.name}
+              {count} article{count > 1 ? "s" : ""} sélectionné{count > 1 ? "s" : ""}
             </p>
           </div>
           <RisoButton variant="ghost" size="sm" onClick={onClose}>

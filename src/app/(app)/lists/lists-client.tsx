@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import { Pencil, Trash2 } from "lucide-react"
 import { useEffect, useRef, useState, useTransition, useActionState } from "react"
 import { useFormStatus } from "react-dom"
 
@@ -12,6 +13,7 @@ import { useRealtimeLists } from "@/lib/realtime"
 import { useOfflineCache } from "@/lib/offline/use-offline-cache"
 
 import {
+  clearCheckedItems,
   createList,
   deleteList,
   renameList,
@@ -148,6 +150,9 @@ function CreateSubmit() {
 /*  Tuile de liste                                                             */
 /* -------------------------------------------------------------------------- */
 
+/** Panneau ouvert sous la tuile (un seul à la fois). */
+type TileMode = null | "edit" | "menu" | "clear" | "delete"
+
 function ListTile({
   list,
   shadow,
@@ -156,9 +161,8 @@ function ListTile({
   shadow: TileShadow
 }) {
   const [isPending, startTransition] = useTransition()
-  const [editing, setEditing] = useState(false)
+  const [mode, setMode] = useState<TileMode>(null)
   const [name, setName] = useState(list.name)
-  const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [error, setError] = useState<string | undefined>()
 
   function run(action: () => Promise<ActionResult>) {
@@ -166,19 +170,18 @@ function ListTile({
     startTransition(async () => {
       const result = await action()
       if (!result.ok) setError(result.error)
-      else {
-        setEditing(false)
-        setConfirmingDelete(false)
-      }
+      else setMode(null)
     })
   }
 
   const updatedLabel = formatUpdatedAt(list.updatedAt)
+  // Articles « déjà pris » (cochés) que « Vider la liste » retirerait.
+  const checked = Math.max(0, list.total - list.unchecked)
 
   return (
     <li>
       <RisoCard shadow={shadow} padding="default">
-        {editing ? (
+        {mode === "edit" ? (
           /* --- Mode renommage --- */
           <div className="flex flex-col gap-3">
             <RisoInput
@@ -201,7 +204,7 @@ function ListTile({
                 disabled={isPending}
                 onClick={() => {
                   setName(list.name)
-                  setEditing(false)
+                  setMode(null)
                   setError(undefined)
                 }}
               >
@@ -234,29 +237,92 @@ function ListTile({
               )}
             </Link>
 
-            <div className="mt-3 flex gap-1.5 border-t-2 border-dashed border-ink pt-3">
+            {/* Action principale : vider les « déjà pris ». Le crayon ouvre le
+                menu discret (renommer / supprimer la liste). */}
+            <div className="mt-3 flex items-center gap-1.5 border-t-2 border-dashed border-ink pt-3">
               <RisoButton
                 variant="secondary"
                 size="sm"
-                disabled={isPending}
-                onClick={() => setEditing(true)}
+                disabled={isPending || checked === 0}
+                onClick={() => setMode("clear")}
+                title={
+                  checked === 0 ? "Rien à vider (aucun article coché)" : undefined
+                }
               >
-                Renommer
+                Vider la liste
+                {checked > 0 ? ` · ${checked}` : ""}
+              </RisoButton>
+              <button
+                type="button"
+                aria-label="Modifier la liste"
+                aria-expanded={mode === "menu"}
+                disabled={isPending}
+                onClick={() => setMode((m) => (m === "menu" ? null : "menu"))}
+                className="ml-auto inline-flex size-11 shrink-0 items-center justify-center rounded-[8px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px disabled:opacity-50"
+              >
+                <Pencil className="size-5" strokeWidth={2.5} aria-hidden />
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* Menu discret du crayon : renommer ou supprimer la liste */}
+        {mode === "menu" && (
+          <div className="mt-3 flex flex-wrap gap-1.5 border-t-2 border-dashed border-ink pt-3">
+            <RisoButton
+              variant="secondary"
+              size="sm"
+              disabled={isPending}
+              onClick={() => {
+                setName(list.name)
+                setMode("edit")
+              }}
+            >
+              <Pencil aria-hidden /> Renommer
+            </RisoButton>
+            <RisoButton
+              variant="ghost"
+              size="sm"
+              disabled={isPending}
+              onClick={() => setMode("delete")}
+            >
+              <Trash2 aria-hidden /> Supprimer
+            </RisoButton>
+          </div>
+        )}
+
+        {/* Confirmation de vidage (retire les articles cochés) */}
+        {mode === "clear" && (
+          <div className="mt-3 flex flex-col gap-2 border-t-2 border-dashed border-ink pt-3">
+            <p className="text-[12px] leading-snug text-ink">
+              Retirer les {checked} article{checked > 1 ? "s" : ""} déjà pris de
+              « {list.name} » ? Les articles à acheter restent.
+            </p>
+            <div className="flex gap-1.5">
+              <RisoButton
+                size="sm"
+                disabled={isPending}
+                onClick={() => run(() => clearCheckedItems(list.id))}
+              >
+                Vider
               </RisoButton>
               <RisoButton
                 variant="ghost"
                 size="sm"
                 disabled={isPending}
-                onClick={() => setConfirmingDelete((v) => !v)}
+                onClick={() => {
+                  setMode(null)
+                  setError(undefined)
+                }}
               >
-                Suppr.
+                Annuler
               </RisoButton>
             </div>
-          </>
+          </div>
         )}
 
         {/* Confirmation de suppression */}
-        {confirmingDelete && !editing && (
+        {mode === "delete" && (
           <div className="mt-3 flex flex-col gap-2 border-t-2 border-dashed border-ink pt-3">
             <p className="text-[12px] leading-snug text-ink">
               Supprimer définitivement la liste « {list.name} »
@@ -278,7 +344,7 @@ function ListTile({
                 size="sm"
                 disabled={isPending}
                 onClick={() => {
-                  setConfirmingDelete(false)
+                  setMode(null)
                   setError(undefined)
                 }}
               >
