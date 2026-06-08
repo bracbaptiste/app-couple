@@ -78,7 +78,11 @@
       "Bash(echo \"---EXIT $?---\")",
       "Bash(npx vitest *)",
       "Bash(echo \"---TSC EXIT $?---\")",
-      "Bash(echo \"---LINT EXIT $?---\")"
+      "Bash(echo \"---LINT EXIT $?---\")",
+      "Bash(git -C \"C:\\\\Users\\\\bapti\\\\OneDrive\\\\Bureau\\\\dossier pour Claude\\\\Appli couple\" add -A)",
+      "Bash(git -C \"C:\\\\Users\\\\bapti\\\\OneDrive\\\\Bureau\\\\dossier pour Claude\\\\Appli couple\" status --short)",
+      "Bash(git -C \"C:\\\\Users\\\\bapti\\\\OneDrive\\\\Bureau\\\\dossier pour Claude\\\\Appli couple\" diff --cached -- .claude/settings.local.json)",
+      "PowerShell(git add .claude/settings.local.json)"
     ]
   }
 }
