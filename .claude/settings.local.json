@@ -73,7 +73,12 @@
       "Bash(grep -iA 30 \"manifest\\\\|icons\\\\|appleWebApp\")",
       "Bash(grep -niB2 -A8 \"manifest\" node_modules/next/dist/docs/01-app/03-api-reference/04-functions/generate-metadata.md)",
       "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('public/manifest.json','utf8'\\)\\); console.log\\('manifest.json valide'\\)\")",
-      "Bash(git rm *)"
+      "Bash(git rm *)",
+      "Bash(npm install *)",
+      "Bash(echo \"---EXIT $?---\")",
+      "Bash(npx vitest *)",
+      "Bash(echo \"---TSC EXIT $?---\")",
+      "Bash(echo \"---LINT EXIT $?---\")"
     ]
   }
 }
