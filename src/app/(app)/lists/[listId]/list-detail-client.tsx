@@ -10,6 +10,7 @@ import {
   useState,
   useTransition,
 } from "react"
+import { useFormStatus } from "react-dom"
 
 import { AddedByMarker } from "@/components/ui/added-by-marker"
 import { CategoryHeader } from "@/components/ui/category-header"
@@ -394,17 +395,20 @@ function AddItemField({ listId }: { listId: string }) {
   )
 }
 
-/** Bouton « + » d'ajout, désactivé pendant l'envoi (via le statut du form). */
+/** Bouton « + » d'ajout : désactivé + libellé d'attente pendant l'envoi. */
 function SubmitAdd() {
+  const { pending } = useFormStatus()
   return (
     <RisoButton
       type="submit"
       size="sm"
       variant="primary"
-      className="my-1.5 h-9 shrink-0"
+      disabled={pending}
+      aria-busy={pending}
+      className="shrink-0"
       aria-label="Ajouter"
     >
-      OK
+      {pending ? "…" : "OK"}
     </RisoButton>
   )
 }

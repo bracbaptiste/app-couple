@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { useEffect, useRef, useState, useTransition, useActionState } from "react"
+import { useFormStatus } from "react-dom"
 
 import { RisoButton } from "@/components/ui/riso-button"
 import { RisoCard } from "@/components/ui/riso-card"
@@ -119,14 +120,27 @@ function CreateListForm() {
               maxLength={50}
               required
             />
-            <RisoButton type="submit" className="h-12 shrink-0 px-4 text-sm">
-              Créer
-            </RisoButton>
+            <CreateSubmit />
           </div>
         </Field>
         <FormFeedback error={error} />
       </form>
     </RisoCard>
+  )
+}
+
+/** Bouton « Créer » : désactivé + libellé d'attente pendant l'envoi. */
+function CreateSubmit() {
+  const { pending } = useFormStatus()
+  return (
+    <RisoButton
+      type="submit"
+      disabled={pending}
+      aria-busy={pending}
+      className="h-12 shrink-0 px-4 text-sm"
+    >
+      {pending ? "…" : "Créer"}
+    </RisoButton>
   )
 }
 

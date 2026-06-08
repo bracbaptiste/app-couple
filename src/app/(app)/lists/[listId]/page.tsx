@@ -1,4 +1,5 @@
 import Link from "next/link"
+import { ArrowLeft } from "lucide-react"
 import { notFound, redirect } from "next/navigation"
 
 import { createClient } from "@/lib/supabase/server"
@@ -98,11 +99,13 @@ export default async function ListDetailPage({
   return (
     <section className="mx-auto w-full max-w-sm">
       <div className="mb-4">
+        {/* Retour : cible tap 44px (DESIGN_SYSTEM §8), aligné au bord gauche. */}
         <Link
           href="/lists"
-          className="font-mono text-[11px] font-bold uppercase tracking-wide text-ink-soft"
+          className="-ml-2 inline-flex min-h-11 items-center gap-1 rounded-[8px] px-2 font-mono text-[11px] font-bold uppercase tracking-wide text-ink-soft outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px"
         >
-          ← Listes
+          <ArrowLeft className="size-4" strokeWidth={2.5} aria-hidden />
+          Listes
         </Link>
         <h1 className="mt-1 font-display text-xl uppercase text-ink">
           {list.name}

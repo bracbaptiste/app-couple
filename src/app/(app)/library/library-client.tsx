@@ -184,9 +184,10 @@ function FrequencyDots({ frequency }: { frequency: Frequency }) {
         <span
           key={dot}
           aria-hidden
+          // §5.8 : carrés 9px, bordure 1.5px encre, remplis en brique selon la fréquence.
           className={cn(
-            "size-2.5 rounded-full border-2 border-ink",
-            dot <= frequency ? "bg-ink" : "bg-transparent",
+            "size-[9px] rounded-[2px] border-[1.5px] border-ink",
+            dot <= frequency ? "bg-brique" : "bg-transparent",
           )}
         />
       ))}

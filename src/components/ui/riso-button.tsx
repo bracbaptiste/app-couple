@@ -9,7 +9,9 @@ import { cn } from "@/lib/utils"
  * (translation +1px + ombre annulée) — jamais d'ombre floue.
  */
 const risoButtonVariants = cva(
-  "group/riso-button inline-flex shrink-0 items-center justify-center gap-2 rounded-[8px] border-2 border-ink font-display text-xs uppercase leading-none tracking-tight whitespace-nowrap outline-none transition-[transform,box-shadow] select-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px active:shadow-none disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  // `min-h-11` garantit une cible tap de 44px sur TOUS les boutons (DESIGN_SYSTEM §8),
+  // y compris la taille `sm`, sans toucher au padding/typo de chaque variante.
+  "group/riso-button inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-[8px] border-2 border-ink font-display text-xs uppercase leading-none tracking-tight whitespace-nowrap outline-none transition-[transform,box-shadow] select-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px active:shadow-none disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
