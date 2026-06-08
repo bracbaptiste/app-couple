@@ -16,16 +16,13 @@ import { CategoryHeader } from "@/components/ui/category-header"
 import { RisoButton } from "@/components/ui/riso-button"
 import { RisoCheckbox } from "@/components/ui/riso-checkbox"
 import { cn } from "@/lib/utils"
+import { useRealtimeListItems } from "@/lib/realtime"
+import { runMutation } from "@/lib/offline/mutation-queue"
+import { useOfflineCache } from "@/lib/offline/use-offline-cache"
+import { useOnlineStatus } from "@/lib/offline/use-online-status"
 import { FormFeedback } from "@/app/(auth)/form-ui"
 
-import {
-  addItem,
-  deleteItem,
-  moveItemToCategory,
-  toggleItem,
-  updateItemDetails,
-  type ActionResult,
-} from "./actions"
+import { type ActionResult } from "./actions"
 
 type Color = "sauge" | "brique"
 
@@ -58,6 +55,7 @@ export type ItemView = {
 
 type ListDetailProps = {
   listId: string
+  coupleId: string
   /** Rayons du couple, déjà triés par `position`. */
   categories: CategoryView[]
   members: MemberView[]
@@ -78,13 +76,53 @@ type OptimisticAction =
   | { kind: "toggle"; id: string; checked: boolean }
   | { kind: "recategorize"; libraryItemId: string; categoryId: string | null }
 
+/**
+ * Réducteur partagé : applique UNE action de déplacement à la liste d'articles.
+ * Réutilisé à deux endroits avec une sémantique différente :
+ *   - dans `useOptimistic` (feedback EN LIGNE, annulé en fin de transition) ;
+ *   - sur l'overlay HORS LIGNE (changements PERSISTANTS tant qu'on n'a pas
+ *     resynchronisé), pour que la case ne « rebondisse » pas quand la transition
+ *     se termine sans rafraîchissement serveur.
+ */
+function applyOptimisticAction(
+  current: ItemView[],
+  action: OptimisticAction,
+): ItemView[] {
+  if (action.kind === "toggle") {
+    return current.map((it) =>
+      it.id === action.id ? { ...it, isChecked: action.checked } : it,
+    )
+  }
+  // Recatégorisation : le rayon vit sur le library_item, donc on l'applique à
+  // tous les articles de la liste qui pointent vers ce même produit.
+  return current.map((it) =>
+    it.libraryItemId === action.libraryItemId
+      ? { ...it, categoryId: action.categoryId }
+      : it,
+  )
+}
+
 /** Pilote l'écran détail : ajout, regroupement par rayon, section « Déjà pris ». */
 export function ListDetail({
   listId,
+  coupleId,
   categories,
   members,
   items,
 }: ListDetailProps) {
+  // Temps réel : ajout / cochage / modif / suppression côté partenaire (sur les
+  // articles de cette liste, ou une recatégorisation/renommage de rayon)
+  // rafraîchit l'écran sans refresh manuel. `useOptimistic` reste prioritaire
+  // pour les actions locales ; `refresh()` ne met à jour que la donnée de base.
+  useRealtimeListItems(listId, coupleId)
+
+  // Cache de lecture : on enregistre la dernière copie connue de l'écran à
+  // chaque chargement (en ligne). Fondation pour la consultation hors ligne
+  // (cf. limites dans use-offline-cache.ts).
+  useOfflineCache(`list-items:${listId}`, { items, categories, members })
+
+  const online = useOnlineStatus()
+
   // Index prénom/couleur par id de profil, pour le marqueur « ajouté par ».
   const membersById = useMemo(() => {
     const map = new Map<string, MemberView>()
@@ -101,32 +139,51 @@ export function ListDetail({
   //   - échec  → `items` est inchangé : rollback visuel automatique.
   const [optimisticItems, applyOptimistic] = useOptimistic(
     items,
-    (current: ItemView[], action: OptimisticAction): ItemView[] => {
-      if (action.kind === "toggle") {
-        return current.map((it) =>
-          it.id === action.id ? { ...it, isChecked: action.checked } : it,
-        )
-      }
-      // Recatégorisation : le rayon vit sur le library_item, donc on l'applique
-      // à tous les articles de la liste qui pointent vers ce même produit.
-      return current.map((it) =>
-        it.libraryItemId === action.libraryItemId
-          ? { ...it, categoryId: action.categoryId }
-          : it,
-      )
-    },
+    applyOptimisticAction,
   )
   const [isPending, startAction] = useTransition()
   const [actionError, setActionError] = useState<string | undefined>()
 
+  // Overlay HORS LIGNE : `useOptimistic` annule sa valeur dès que la transition
+  // se termine, or hors ligne le serveur ne revalide rien → sans cet overlay, la
+  // case cochée « rebondirait » à l'état serveur. On accumule donc les actions
+  // faites sans réseau ici (elles persistent) et on les rejoue sur l'affichage.
+  // Au retour du réseau, le rejeu de la file + `router.refresh()` (porté par
+  // l'OfflineIndicator) ramène la vérité serveur : on vide alors l'overlay.
+  const [offlinePatches, setOfflinePatches] = useState<OptimisticAction[]>([])
+  const wasOnline = useRef(true)
+  useEffect(() => {
+    if (online && !wasOnline.current) setOfflinePatches([])
+    wasOnline.current = online
+  }, [online])
+
+  // Affichage = état serveur + optimiste en vol + patches hors ligne persistants.
+  const displayItems = useMemo(
+    () => offlinePatches.reduce(applyOptimisticAction, optimisticItems),
+    [optimisticItems, offlinePatches],
+  )
+
+  /** Mémorise un changement de section s'il est fait hors ligne (sinon no-op). */
+  function rememberIfOffline(action: OptimisticAction) {
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      setOfflinePatches((prev) => [...prev, action])
+    }
+  }
+
   function handleToggle(itemId: string, next: boolean) {
     setActionError(undefined)
+    const action: OptimisticAction = { kind: "toggle", id: itemId, checked: next }
     startAction(async () => {
       // Application optimiste DANS la transition : la section bouge tout de suite.
-      applyOptimistic({ kind: "toggle", id: itemId, checked: next })
-      const result = await toggleItem(listId, itemId, next)
-      // Pas de rollback manuel : si `result.ok === false`, la transition se
-      // termine et `useOptimistic` restaure l'état serveur (article non déplacé).
+      applyOptimistic(action)
+      rememberIfOffline(action)
+      // `runMutation` exécute la Server Action en ligne, ou enfile l'action hors
+      // ligne en renvoyant { ok: true } (l'overlay garde le visuel à jour).
+      const result = await runMutation("toggleItem", {
+        listId,
+        itemId,
+        checked: next,
+      })
       if (!result.ok) setActionError(result.error)
     })
   }
@@ -143,15 +200,25 @@ export function ListDetail({
     categoryId: string | null,
   ) {
     setActionError(undefined)
+    const action: OptimisticAction = {
+      kind: "recategorize",
+      libraryItemId,
+      categoryId,
+    }
     startAction(async () => {
-      applyOptimistic({ kind: "recategorize", libraryItemId, categoryId })
-      const result = await moveItemToCategory(listId, libraryItemId, categoryId)
+      applyOptimistic(action)
+      rememberIfOffline(action)
+      const result = await runMutation("moveItemToCategory", {
+        listId,
+        libraryItemId,
+        categoryId,
+      })
       if (!result.ok) setActionError(result.error)
     })
   }
 
-  const unchecked = optimisticItems.filter((i) => !i.isChecked)
-  const checked = optimisticItems.filter((i) => i.isChecked)
+  const unchecked = displayItems.filter((i) => !i.isChecked)
+  const checked = displayItems.filter((i) => i.isChecked)
 
   // Regroupe les non-cochés par rayon, dans l'ordre des catégories
   // (categories.position côté serveur), « Sans rayon » en dernier.
@@ -181,10 +248,10 @@ export function ListDetail({
       ordered.push({ id: NO_CATEGORY, name: "Sans rayon", items: none })
     }
     return ordered
-    // `unchecked` est dérivé d'`optimisticItems` : on dépend de lui et `categories`.
-  }, [optimisticItems, categories]) // eslint-disable-line react-hooks/exhaustive-deps
+    // `unchecked` est dérivé de `displayItems` : on dépend de lui et `categories`.
+  }, [displayItems, categories]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const isEmpty = optimisticItems.length === 0
+  const isEmpty = displayItems.length === 0
 
   return (
     <div className="flex flex-col gap-5">
@@ -270,7 +337,20 @@ export function ListDetail({
 /* -------------------------------------------------------------------------- */
 
 function AddItemField({ listId }: { listId: string }) {
-  const action = addItem.bind(null, listId)
+  // Adaptateur client : on lit le champ et on passe par `runMutation` pour que
+  // l'ajout fonctionne aussi hors ligne (mis en file). LIMITE V1 : hors ligne,
+  // l'article n'apparaît PAS tout de suite dans la liste (pas d'insertion
+  // optimiste — la résolution bibliothèque/rayon est côté serveur) ; il
+  // apparaît après la resynchronisation. Le champ se vide quand même (feedback).
+  const action = async (
+    _prev: ActionResult | null,
+    formData: FormData,
+  ): Promise<ActionResult> =>
+    runMutation("addItem", {
+      listId,
+      rawName: String(formData.get("name") ?? ""),
+    })
+
   const [state, formAction] = useActionState<ActionResult | null, FormData>(
     action,
     null,
@@ -477,7 +557,13 @@ function ItemRow({
           onCancel={() => setMode(null)}
           onSave={(quantity, note) =>
             run(
-              () => updateItemDetails(listId, item.id, quantity, note),
+              () =>
+                runMutation("updateItemDetails", {
+                  listId,
+                  itemId: item.id,
+                  quantity,
+                  note,
+                }),
               () => setMode(null),
             )
           }
@@ -493,7 +579,9 @@ function ItemRow({
             <RisoButton
               size="sm"
               disabled={isPending}
-              onClick={() => run(() => deleteItem(listId, item.id))}
+              onClick={() =>
+                run(() => runMutation("deleteItem", { listId, itemId: item.id }))
+              }
             >
               Confirmer
             </RisoButton>

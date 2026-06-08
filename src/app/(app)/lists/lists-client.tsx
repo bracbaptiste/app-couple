@@ -7,6 +7,8 @@ import { RisoButton } from "@/components/ui/riso-button"
 import { RisoCard } from "@/components/ui/riso-card"
 import { RisoInput } from "@/components/ui/riso-input"
 import { Field, FormFeedback } from "@/app/(auth)/form-ui"
+import { useRealtimeLists } from "@/lib/realtime"
+import { useOfflineCache } from "@/lib/offline/use-offline-cache"
 
 import {
   createList,
@@ -43,7 +45,20 @@ function formatUpdatedAt(iso: string | null): string | null {
 }
 
 /** Pilote le hub des listes : création + grille de tuiles éditables. */
-export function ListsManager({ lists }: { lists: ListView[] }) {
+export function ListsManager({
+  lists,
+  coupleId,
+}: {
+  lists: ListView[]
+  coupleId: string
+}) {
+  // Temps réel : un changement de liste ou d'article côté partenaire rafraîchit
+  // la grille (décomptes + dernière activité) sans refresh manuel.
+  useRealtimeLists(coupleId)
+
+  // Cache de lecture (fondation hors ligne) : on garde la dernière grille connue.
+  useOfflineCache("lists", lists)
+
   return (
     <div className="flex flex-col gap-5">
       <CreateListForm />

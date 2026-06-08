@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation"
 
 import { BottomNav } from "@/components/shared/bottom-nav"
+import { OfflineIndicator } from "@/components/shared/offline-indicator"
 import { requireAuth } from "@/lib/supabase/auth"
 
 /**
@@ -26,6 +27,9 @@ export default async function AppLayout({
 
   return (
     <div className="flex min-h-dvh flex-col">
+      {/* Bandeau discret « hors ligne / synchro » + rejeu de la file au retour
+          du réseau. Sticky en haut, non bloquant (cf. OfflineIndicator). */}
+      <OfflineIndicator />
       <main className="flex-1 px-4 pt-5 pb-6">{children}</main>
       <BottomNav />
     </div>

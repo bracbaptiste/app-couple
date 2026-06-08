@@ -125,7 +125,12 @@ export default async function LibraryPage() {
       <h1 className="mb-4 font-display text-xl uppercase text-ink">
         Bibliothèque
       </h1>
-      <LibraryBrowser groups={groups} lists={lists} total={items.length} />
+      <LibraryBrowser
+        groups={groups}
+        lists={lists}
+        total={items.length}
+        coupleId={profile.couple_id}
+      />
     </section>
   )
 }

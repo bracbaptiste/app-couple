@@ -111,6 +111,7 @@ export default async function ListDetailPage({
 
       <ListDetail
         listId={list.id}
+        coupleId={profile.couple_id}
         categories={categories}
         members={members}
         items={items}

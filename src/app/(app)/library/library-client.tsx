@@ -6,6 +6,8 @@ import { useEffect, useMemo, useState, useTransition } from "react"
 import { CategoryHeader } from "@/components/ui/category-header"
 import { RisoButton } from "@/components/ui/riso-button"
 import { cn } from "@/lib/utils"
+import { useRealtimeLibrary } from "@/lib/realtime"
+import { useOfflineCache } from "@/lib/offline/use-offline-cache"
 
 import { deleteLibraryItem, sendToList, type ActionResult } from "./actions"
 
@@ -60,11 +62,20 @@ export function LibraryBrowser({
   groups,
   lists,
   total,
+  coupleId,
 }: {
   groups: CategoryGroup[]
   lists: ListChoice[]
   total: number
+  coupleId: string
 }) {
+  // Temps réel : un produit ajouté / supprimé / recatégorisé par le partenaire
+  // (ou une liste créée) rafraîchit la bibliothèque sans refresh manuel.
+  useRealtimeLibrary(coupleId)
+
+  // Cache de lecture (fondation hors ligne) : dernière vue connue de la biblio.
+  useOfflineCache("library", { groups, lists, total })
+
   const [query, setQuery] = useState("")
   // Produit dont la feuille « Envoyer vers… » est ouverte (un seul à la fois).
   const [sending, setSending] = useState<LibraryItemView | null>(null)
