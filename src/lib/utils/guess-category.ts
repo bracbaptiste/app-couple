@@ -21,6 +21,10 @@ function normalize(value: string): string {
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "") // retire les diacritiques (accents)
     .toLowerCase()
+    // Ligatures françaises non décomposées par NFD : « œuf » → « oeuf », « bœuf »
+    // → « boeuf », sans quoi ces mots-clés courants échapperaient à la table.
+    .replace(/œ/g, "oe")
+    .replace(/æ/g, "ae")
     .trim()
 }
 

@@ -55,9 +55,11 @@ function encodePng(size, rgb) {
   const raw = Buffer.alloc(size * (size * 4 + 1));
   for (let y = 0; y < size; y++) {
     raw[y * (size * 4 + 1)] = 0; // filter none
-    rgb.copy
-      ? rgb.copy(raw, y * (size * 4 + 1) + 1, y * size * 4, (y + 1) * size * 4)
-      : Buffer.from(rgb.buffer, y * size * 4, size * 4).copy(raw, y * (size * 4 + 1) + 1);
+    if (rgb.copy) {
+      rgb.copy(raw, y * (size * 4 + 1) + 1, y * size * 4, (y + 1) * size * 4);
+    } else {
+      Buffer.from(rgb.buffer, y * size * 4, size * 4).copy(raw, y * (size * 4 + 1) + 1);
+    }
   }
   const idat = deflateSync(raw, { level: 9 });
   return Buffer.concat([

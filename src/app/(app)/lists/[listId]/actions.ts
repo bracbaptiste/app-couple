@@ -5,6 +5,7 @@ import { redirect } from "next/navigation"
 
 import { createClient } from "@/lib/supabase/server"
 import { guessCategory } from "@/lib/utils/guess-category"
+import { normalizeItemName } from "@/lib/utils/normalize-item-name"
 
 /** Client Supabase serveur typé (inféré du helper, comme dans lists/actions.ts). */
 type ServerClient = Awaited<ReturnType<typeof createClient>>
@@ -12,29 +13,12 @@ type ServerClient = Awaited<ReturnType<typeof createClient>>
 /** Résultat uniforme renvoyé aux formulaires / handlers client. */
 export type ActionResult = { ok: true } | { ok: false; error: string }
 
-const NAME_MAX = 60
 const QUANTITY_MAX = 30
 const NOTE_MAX = 200
 
 /** Borne une chaîne saisie : trim + longueur max. */
 function clamp(raw: unknown, max: number): string {
   return String(raw ?? "").trim().slice(0, max)
-}
-
-/**
- * Normalise le nom d'un article pour un stockage cohérent :
- *   - trim + espaces multiples réduits à un seul ;
- *   - longueur bornée ;
- *   - casse cohérente (1re lettre majuscule, reste minuscule) → « LESSIVE » et
- *     « lessive » donnent le même libellé, ce qui fiabilise la déduplication.
- */
-function normalizeItemName(raw: unknown): string {
-  const collapsed = String(raw ?? "")
-    .trim()
-    .replace(/\s+/g, " ")
-    .slice(0, NAME_MAX)
-  if (!collapsed) return ""
-  return collapsed.charAt(0).toUpperCase() + collapsed.slice(1).toLowerCase()
 }
 
 /** Échappe les métacaractères LIKE (`%` et `_`) pour une recherche `ilike` exacte. */
