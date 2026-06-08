@@ -1,7 +1,7 @@
 "use client"
 
-import { Search, Plus, Trash2, Check } from "lucide-react"
-import { useEffect, useMemo, useState, useTransition } from "react"
+import { Search, Plus, Pencil, Trash2, Check } from "lucide-react"
+import { useEffect, useMemo, useRef, useState, useTransition } from "react"
 
 import { CategoryHeader } from "@/components/ui/category-header"
 import { RisoButton } from "@/components/ui/riso-button"
@@ -9,7 +9,12 @@ import { cn } from "@/lib/utils"
 import { useRealtimeLibrary } from "@/lib/realtime"
 import { useOfflineCache } from "@/lib/offline/use-offline-cache"
 
-import { deleteLibraryItem, sendToList, type ActionResult } from "./actions"
+import {
+  deleteLibraryItem,
+  renameLibraryItem,
+  sendToList,
+  type ActionResult,
+} from "./actions"
 
 /** Niveau de fréquence à 4 paliers (cf. `frequencyLevel` côté serveur). */
 export type Frequency = 1 | 2 | 3 | 4
@@ -209,7 +214,8 @@ function LibraryRow({
   onSend: () => void
 }) {
   const [isPending, startTransition] = useTransition()
-  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  // Un seul panneau ouvert à la fois sous la ligne : édition OU suppression.
+  const [mode, setMode] = useState<null | "edit" | "delete">(null)
   const [error, setError] = useState<string | undefined>()
 
   function run(action: () => Promise<ActionResult>, onSuccess?: () => void) {
@@ -249,20 +255,57 @@ function LibraryRow({
           <Plus aria-hidden /> Ajouter
         </RisoButton>
 
+        {/* Modifier le nom */}
+        <button
+          type="button"
+          aria-label={`Modifier ${item.name}`}
+          aria-expanded={mode === "edit"}
+          disabled={isPending}
+          onClick={() => {
+            setMode((m) => (m === "edit" ? null : "edit"))
+            setError(undefined)
+          }}
+          className="inline-flex size-11 shrink-0 items-center justify-center rounded-[8px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px disabled:opacity-50"
+        >
+          <Pencil className="size-5" strokeWidth={2.5} aria-hidden />
+        </button>
+
         {/* Supprimer */}
         <button
           type="button"
           aria-label={`Supprimer ${item.name}`}
+          aria-expanded={mode === "delete"}
           disabled={isPending}
-          onClick={() => setConfirmingDelete((v) => !v)}
+          onClick={() => {
+            setMode((m) => (m === "delete" ? null : "delete"))
+            setError(undefined)
+          }}
           className="inline-flex size-11 shrink-0 items-center justify-center rounded-[8px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-brique focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px disabled:opacity-50"
         >
           <Trash2 className="size-5" strokeWidth={2.5} aria-hidden />
         </button>
       </div>
 
+      {/* Édition du nom (corrige une faute → répercutée sur toutes les listes) */}
+      {mode === "edit" && (
+        <RenameForm
+          item={item}
+          disabled={isPending}
+          onCancel={() => {
+            setMode(null)
+            setError(undefined)
+          }}
+          onSave={(name) =>
+            run(
+              () => renameLibraryItem(item.id, name),
+              () => setMode(null),
+            )
+          }
+        />
+      )}
+
       {/* Confirmation de suppression */}
-      {confirmingDelete && (
+      {mode === "delete" && (
         <div className="mt-2 flex flex-col gap-2 border-t-2 border-dashed border-ink pt-2">
           <p className="text-[12px] leading-snug text-ink">
             Supprimer « {item.name} » de la bibliothèque ? Cela efface sa mémoire
@@ -275,7 +318,7 @@ function LibraryRow({
               onClick={() =>
                 run(
                   () => deleteLibraryItem(item.id),
-                  () => setConfirmingDelete(false),
+                  () => setMode(null),
                 )
               }
             >
@@ -286,7 +329,7 @@ function LibraryRow({
               size="sm"
               disabled={isPending}
               onClick={() => {
-                setConfirmingDelete(false)
+                setMode(null)
                 setError(undefined)
               }}
             >
@@ -305,6 +348,88 @@ function LibraryRow({
         </p>
       )}
     </li>
+  )
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Formulaire de renommage inline                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Champ d'édition du nom d'un produit, déplié sous la ligne. Pré-rempli avec le
+ * nom courant et focus automatique. Entrée = enregistrer, Échap = annuler.
+ */
+function RenameForm({
+  item,
+  disabled,
+  onCancel,
+  onSave,
+}: {
+  item: LibraryItemView
+  disabled: boolean
+  onCancel: () => void
+  onSave: (name: string) => void
+}) {
+  const [name, setName] = useState(item.name)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  // Focus + sélection à l'ouverture (correction rapide d'une faute).
+  useEffect(() => {
+    const el = inputRef.current
+    if (el) {
+      el.focus()
+      el.select()
+    }
+  }, [])
+
+  const trimmed = name.trim()
+  // Désactive l'enregistrement si vide ou identique au nom courant.
+  const unchanged = trimmed === "" || trimmed === item.name
+
+  function submit() {
+    if (disabled || unchanged) return
+    onSave(name)
+  }
+
+  return (
+    <div className="mt-2 flex flex-col gap-2 border-t-2 border-dashed border-ink pt-2">
+      <label className="font-mono text-[11px] font-bold uppercase tracking-wide text-ink-soft">
+        Nom de l’article
+      </label>
+      <input
+        ref={inputRef}
+        value={name}
+        disabled={disabled}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault()
+            submit()
+          } else if (e.key === "Escape") {
+            e.preventDefault()
+            onCancel()
+          }
+        }}
+        maxLength={60}
+        aria-label={`Nouveau nom pour ${item.name}`}
+        className="h-11 w-full rounded-[8px] border-2 border-ink bg-paper-light px-3 text-base text-ink outline-none placeholder:text-ink-soft/60 focus-visible:shadow-riso-sauge"
+      />
+      <p className="font-mono text-[11px] leading-snug text-ink-soft">
+        La correction s’applique à toutes les listes contenant cet article.
+      </p>
+      <div className="flex gap-1.5">
+        <RisoButton
+          size="sm"
+          disabled={disabled || unchanged}
+          onClick={submit}
+        >
+          Enregistrer
+        </RisoButton>
+        <RisoButton variant="ghost" size="sm" disabled={disabled} onClick={onCancel}>
+          Annuler
+        </RisoButton>
+      </div>
+    </div>
   )
 }
 
