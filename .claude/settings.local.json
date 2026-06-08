@@ -82,7 +82,8 @@
       "Bash(git -C \"C:\\\\Users\\\\bapti\\\\OneDrive\\\\Bureau\\\\dossier pour Claude\\\\Appli couple\" add -A)",
       "Bash(git -C \"C:\\\\Users\\\\bapti\\\\OneDrive\\\\Bureau\\\\dossier pour Claude\\\\Appli couple\" status --short)",
       "Bash(git -C \"C:\\\\Users\\\\bapti\\\\OneDrive\\\\Bureau\\\\dossier pour Claude\\\\Appli couple\" diff --cached -- .claude/settings.local.json)",
-      "PowerShell(git add .claude/settings.local.json)"
+      "PowerShell(git add .claude/settings.local.json)",
+      "PowerShell(npx tsc --noEmit; echo \"---TSC EXIT $LASTEXITCODE---\")"
     ]
   }
 }
