@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { Pencil, Trash2 } from "lucide-react"
+import { Pencil, Plus, Trash2, X } from "lucide-react"
 import { useEffect, useRef, useState, useTransition, useActionState } from "react"
 import { useFormStatus } from "react-dom"
 
@@ -62,9 +62,32 @@ export function ListsManager({
   // Cache de lecture (fondation hors ligne) : on garde la dernière grille connue.
   useOfflineCache("lists", lists)
 
+  // Le formulaire de création est replié par défaut : un bouton « + » le déploie
+  // pour garder le hub épuré quand on consulte simplement ses listes.
+  const [creating, setCreating] = useState(false)
+
   return (
     <div className="flex flex-col gap-5">
-      <CreateListForm />
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center gap-3">
+          <h1 className="font-display text-xl uppercase text-ink">Listes</h1>
+          <button
+            type="button"
+            aria-expanded={creating}
+            aria-label={creating ? "Fermer le formulaire" : "Nouvelle liste"}
+            onClick={() => setCreating((c) => !c)}
+            className="ml-auto inline-flex size-11 shrink-0 items-center justify-center rounded-[8px] border-2 border-ink bg-brique text-paper-light shadow-riso-ink-sm outline-none transition-[transform,box-shadow] focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px active:shadow-none"
+          >
+            {creating ? (
+              <X className="size-5" strokeWidth={2.5} aria-hidden />
+            ) : (
+              <Plus className="size-5" strokeWidth={2.5} aria-hidden />
+            )}
+          </button>
+        </div>
+
+        {creating && <CreateListForm onCreated={() => setCreating(false)} />}
+      </div>
 
       {lists.length === 0 ? (
         <RisoCard shadow="sauge">
@@ -92,17 +115,20 @@ export function ListsManager({
 /*  Création                                                                   */
 /* -------------------------------------------------------------------------- */
 
-function CreateListForm() {
+function CreateListForm({ onCreated }: { onCreated?: () => void }) {
   const [state, formAction] = useActionState<ActionResult | null, FormData>(
     createList,
     null,
   )
   const formRef = useRef<HTMLFormElement>(null)
 
-  // Réinitialise le champ après une création réussie.
+  // Réinitialise le champ et replie le panneau après une création réussie.
   useEffect(() => {
-    if (state?.ok) formRef.current?.reset()
-  }, [state])
+    if (state?.ok) {
+      formRef.current?.reset()
+      onCreated?.()
+    }
+  }, [state, onCreated])
 
   const error = state && !state.ok ? state.error : undefined
 
@@ -120,6 +146,7 @@ function CreateListForm() {
               type="text"
               placeholder="Ex : Courses de la semaine"
               maxLength={50}
+              autoFocus
               required
             />
             <CreateSubmit />
