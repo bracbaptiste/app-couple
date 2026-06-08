@@ -1,6 +1,6 @@
 "use client"
 
-import { Search, Send, Trash2, Check } from "lucide-react"
+import { Search, Plus, Trash2, Check } from "lucide-react"
 import { useEffect, useMemo, useState, useTransition } from "react"
 
 import { CategoryHeader } from "@/components/ui/category-header"
@@ -246,7 +246,7 @@ function LibraryRow({
           aria-label={`Envoyer ${item.name} vers une liste`}
           title={hasLists ? undefined : "Crée d’abord une liste"}
         >
-          <Send aria-hidden /> Envoyer
+          <Plus aria-hidden /> Ajouter
         </RisoButton>
 
         {/* Supprimer */}
