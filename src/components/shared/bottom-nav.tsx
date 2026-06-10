@@ -2,9 +2,10 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { LayoutGrid, ListChecks, User, type LucideIcon } from "lucide-react"
+import { ListChecks, User, type LucideIcon } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { BiblioCartIcon } from "@/components/shared/biblio-cart-icon"
 
 /**
  * BottomNav — barre de navigation basse du Design System Sauge & Brique.
@@ -16,12 +17,14 @@ import { cn } from "@/lib/utils"
 export type BottomNavItem = {
   href: string
   label: string
-  icon: LucideIcon
+  icon: LucideIcon | typeof BiblioCartIcon
+  /** Masque le texte sous l'icône (l'icône porte déjà l'identité de l'onglet). */
+  hideLabel?: boolean
 }
 
 const DEFAULT_ITEMS: BottomNavItem[] = [
   { href: "/lists", label: "Listes", icon: ListChecks },
-  { href: "/library", label: "Biblio", icon: LayoutGrid },
+  { href: "/library", label: "Biblio", icon: BiblioCartIcon, hideLabel: true },
   { href: "/profile", label: "Profil", icon: User },
 ]
 
@@ -41,7 +44,7 @@ function BottomNav({ items = DEFAULT_ITEMS, className }: BottomNavProps) {
         className
       )}
     >
-      {items.map(({ href, label, icon: Icon }) => {
+      {items.map(({ href, label, icon: Icon, hideLabel }) => {
         const active = pathname === href || pathname.startsWith(`${href}/`)
 
         return (
@@ -49,6 +52,7 @@ function BottomNav({ items = DEFAULT_ITEMS, className }: BottomNavProps) {
             key={href}
             href={href}
             aria-current={active ? "page" : undefined}
+            aria-label={hideLabel ? label : undefined}
             className={cn(
               "flex min-h-11 flex-1 flex-col items-center justify-center gap-1 rounded-[8px] border-2 py-1.5 font-display text-[9px] uppercase leading-none transition-colors",
               active
@@ -57,7 +61,7 @@ function BottomNav({ items = DEFAULT_ITEMS, className }: BottomNavProps) {
             )}
           >
             <Icon className="size-[21px]" strokeWidth={2.5} aria-hidden />
-            {label}
+            {!hideLabel && label}
           </Link>
         )
       })}

@@ -7,6 +7,7 @@ import { groupLibraryItems } from "@/lib/utils/group-library-items"
 import {
   LibraryBrowser,
   type CategoryGroup,
+  type CategoryChoice,
   type ListChoice,
 } from "./library-client"
 
@@ -59,14 +60,22 @@ export default async function LibraryPage() {
     name: l.name,
   }))
 
+  // Tous les rayons du couple (pas seulement ceux qui contiennent un produit) —
+  // pour le sélecteur de rayon à la création et à l'édition d'un article.
+  const categoryChoices: CategoryChoice[] = categories.map((c) => ({
+    id: c.id,
+    name: c.name,
+  }))
+
   return (
     <section className="mx-auto w-full max-w-sm">
       <h1 className="mb-4 font-display text-xl uppercase text-ink">
-        Bibliothèque
+        Garde-manger
       </h1>
       <LibraryBrowser
         groups={groups}
         lists={lists}
+        categories={categoryChoices}
         total={items.length}
         coupleId={profile.couple_id}
       />

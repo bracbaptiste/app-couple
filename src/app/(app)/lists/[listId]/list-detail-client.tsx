@@ -1,8 +1,7 @@
 "use client"
 
-import { Plus, MoreHorizontal, Tag, Pencil, Trash2, Check } from "lucide-react"
+import { MoreHorizontal, Pencil, Trash2 } from "lucide-react"
 import {
-  useActionState,
   useEffect,
   useMemo,
   useOptimistic,
@@ -10,7 +9,6 @@ import {
   useState,
   useTransition,
 } from "react"
-import { useFormStatus } from "react-dom"
 
 import { AddedByMarker } from "@/components/ui/added-by-marker"
 import { CategoryHeader } from "@/components/ui/category-header"
@@ -21,7 +19,6 @@ import { useRealtimeListItems } from "@/lib/realtime"
 import { runMutation } from "@/lib/offline/mutation-queue"
 import { useOfflineCache } from "@/lib/offline/use-offline-cache"
 import { useOnlineStatus } from "@/lib/offline/use-online-status"
-import { FormFeedback } from "@/app/(auth)/form-ui"
 
 import { type ActionResult } from "./actions"
 
@@ -67,18 +64,14 @@ type ListDetailProps = {
 const NO_CATEGORY = "__none__"
 
 /**
- * Actions internes du réducteur optimiste. Deux mutations déplacent un article
+ * Action interne du réducteur optimiste. Une seule mutation déplace un article
  * d'une section à l'autre sans attendre le serveur :
- *   - `toggle`        : coché ⇄ « Déjà pris » (porté par le list_item) ;
- *   - `recategorize`  : changement de rayon (porté par le library_item, donc
- *                       appliqué à TOUS les articles partageant ce produit).
+ *   - `toggle` : coché ⇄ « Déjà pris » (porté par le list_item).
  */
-type OptimisticAction =
-  | { kind: "toggle"; id: string; checked: boolean }
-  | { kind: "recategorize"; libraryItemId: string; categoryId: string | null }
+type OptimisticAction = { kind: "toggle"; id: string; checked: boolean }
 
 /**
- * Réducteur partagé : applique UNE action de déplacement à la liste d'articles.
+ * Réducteur partagé : applique UNE action de cochage à la liste d'articles.
  * Réutilisé à deux endroits avec une sémantique différente :
  *   - dans `useOptimistic` (feedback EN LIGNE, annulé en fin de transition) ;
  *   - sur l'overlay HORS LIGNE (changements PERSISTANTS tant qu'on n'a pas
@@ -89,17 +82,8 @@ function applyOptimisticAction(
   current: ItemView[],
   action: OptimisticAction,
 ): ItemView[] {
-  if (action.kind === "toggle") {
-    return current.map((it) =>
-      it.id === action.id ? { ...it, isChecked: action.checked } : it,
-    )
-  }
-  // Recatégorisation : le rayon vit sur le library_item, donc on l'applique à
-  // tous les articles de la liste qui pointent vers ce même produit.
   return current.map((it) =>
-    it.libraryItemId === action.libraryItemId
-      ? { ...it, categoryId: action.categoryId }
-      : it,
+    it.id === action.id ? { ...it, isChecked: action.checked } : it,
   )
 }
 
@@ -189,35 +173,6 @@ export function ListDetail({
     })
   }
 
-  /**
-   * Change le rayon d'un article. Le déplacement vers la nouvelle section est
-   * optimiste (l'article apparaît immédiatement sous le bon rayon) ; le serveur
-   * met à jour `library_items.category_id`, ce qui RECLASSE le produit partout
-   * et oriente tous ses futurs ajouts. En cas d'échec, `useOptimistic` restaure
-   * l'état serveur (rollback automatique) et l'erreur s'affiche en tête de liste.
-   */
-  function handleRecategorize(
-    libraryItemId: string,
-    categoryId: string | null,
-  ) {
-    setActionError(undefined)
-    const action: OptimisticAction = {
-      kind: "recategorize",
-      libraryItemId,
-      categoryId,
-    }
-    startAction(async () => {
-      applyOptimistic(action)
-      rememberIfOffline(action)
-      const result = await runMutation("moveItemToCategory", {
-        listId,
-        libraryItemId,
-        categoryId,
-      })
-      if (!result.ok) setActionError(result.error)
-    })
-  }
-
   const unchecked = displayItems.filter((i) => !i.isChecked)
   const checked = displayItems.filter((i) => i.isChecked)
 
@@ -256,8 +211,6 @@ export function ListDetail({
 
   return (
     <div className="flex flex-col gap-5">
-      <AddItemField listId={listId} />
-
       {actionError && (
         <p
           role="alert"
@@ -269,7 +222,8 @@ export function ListDetail({
 
       {isEmpty ? (
         <p className="rounded-[10px] border-2 border-dashed border-ink bg-paper-light px-4 py-6 text-center text-sm text-ink-soft">
-          Cette liste est vide. Ajoute ton premier article ci-dessus.
+          Cette liste est vide. Ajoute des articles depuis la Bibliothèque, avec
+          le bouton « Ajouter à une liste ».
         </p>
       ) : (
         <>
@@ -283,10 +237,8 @@ export function ListDetail({
                     key={item.id}
                     listId={listId}
                     item={item}
-                    categories={categories}
                     member={item.addedBy ? membersById.get(item.addedBy) ?? null : null}
                     onToggle={handleToggle}
-                    onRecategorize={handleRecategorize}
                     toggling={isPending}
                   />
                 ))}
@@ -317,10 +269,8 @@ export function ListDetail({
                     key={item.id}
                     listId={listId}
                     item={item}
-                    categories={categories}
                     member={item.addedBy ? membersById.get(item.addedBy) ?? null : null}
                     onToggle={handleToggle}
-                    onRecategorize={handleRecategorize}
                     toggling={isPending}
                   />
                 ))}
@@ -334,109 +284,24 @@ export function ListDetail({
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Champ « Ajouter un article… » (DESIGN_SYSTEM §5.5)                         */
-/* -------------------------------------------------------------------------- */
-
-function AddItemField({ listId }: { listId: string }) {
-  // Adaptateur client : on lit le champ et on passe par `runMutation` pour que
-  // l'ajout fonctionne aussi hors ligne (mis en file). LIMITE V1 : hors ligne,
-  // l'article n'apparaît PAS tout de suite dans la liste (pas d'insertion
-  // optimiste — la résolution bibliothèque/rayon est côté serveur) ; il
-  // apparaît après la resynchronisation. Le champ se vide quand même (feedback).
-  const action = async (
-    _prev: ActionResult | null,
-    formData: FormData,
-  ): Promise<ActionResult> =>
-    runMutation("addItem", {
-      listId,
-      rawName: String(formData.get("name") ?? ""),
-    })
-
-  const [state, formAction] = useActionState<ActionResult | null, FormData>(
-    action,
-    null,
-  )
-  const formRef = useRef<HTMLFormElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  // Réinitialise le champ après un ajout réussi et garde le focus (saisie en rafale).
-  useEffect(() => {
-    if (state?.ok) {
-      formRef.current?.reset()
-      inputRef.current?.focus()
-    }
-  }, [state])
-
-  const error = state && !state.ok ? state.error : undefined
-
-  return (
-    <div className="flex flex-col gap-2">
-      <form ref={formRef} action={formAction}>
-        {/* Conteneur sauge, bordure encre, ombre encre — icône + à gauche. */}
-        <div className="flex items-center gap-2 rounded-[10px] border-2 border-ink bg-sauge px-3 shadow-riso-ink focus-within:shadow-riso-brique">
-          <Plus className="size-5 shrink-0 text-ink" strokeWidth={2.5} aria-hidden />
-          <input
-            ref={inputRef}
-            name="name"
-            type="text"
-            inputMode="text"
-            autoComplete="off"
-            placeholder="Ajouter un article…"
-            maxLength={60}
-            required
-            aria-label="Ajouter un article"
-            className="h-12 w-full bg-transparent text-base font-medium text-ink outline-none placeholder:font-body placeholder:text-ink/55"
-          />
-          <SubmitAdd />
-        </div>
-      </form>
-      <FormFeedback error={error} />
-    </div>
-  )
-}
-
-/** Bouton « + » d'ajout : désactivé + libellé d'attente pendant l'envoi. */
-function SubmitAdd() {
-  const { pending } = useFormStatus()
-  return (
-    <RisoButton
-      type="submit"
-      size="sm"
-      variant="primary"
-      disabled={pending}
-      aria-busy={pending}
-      className="shrink-0"
-      aria-label="Ajouter"
-    >
-      {pending ? "…" : "OK"}
-    </RisoButton>
-  )
-}
-
-/* -------------------------------------------------------------------------- */
 /*  Ligne d'article                                                            */
 /* -------------------------------------------------------------------------- */
 
-type ItemMode = null | "menu" | "category" | "details" | "delete"
+type ItemMode = null | "menu" | "details" | "delete"
 
 function ItemRow({
   listId,
   item,
-  categories,
   member,
   onToggle,
-  onRecategorize,
   toggling,
 }: {
   listId: string
   item: ItemView
-  categories: CategoryView[]
   member: MemberView | null
   /** Demande le (dé)cochage au parent, qui gère l'état optimiste partagé. */
   onToggle: (itemId: string, next: boolean) => void
-  /** Demande le changement de rayon au parent (optimiste + mémoire couple). */
-  onRecategorize: (libraryItemId: string, categoryId: string | null) => void
-  /** Une transition (cochage / recatégorisation) est en cours dans la liste. */
+  /** Une transition (cochage) est en cours dans la liste. */
   toggling: boolean
 }) {
   const [isPending, startTransition] = useTransition()
@@ -517,14 +382,6 @@ function ItemRow({
             variant="secondary"
             size="sm"
             disabled={isPending}
-            onClick={() => setMode("category")}
-          >
-            <Tag aria-hidden /> Changer de catégorie
-          </RisoButton>
-          <RisoButton
-            variant="secondary"
-            size="sm"
-            disabled={isPending}
             onClick={() => setMode("details")}
           >
             <Pencil aria-hidden /> Quantité / note
@@ -538,20 +395,6 @@ function ItemRow({
             <Trash2 aria-hidden /> Supprimer
           </RisoButton>
         </div>
-      )}
-
-      {mode === "category" && (
-        <CategorySheet
-          item={item}
-          categories={categories}
-          onClose={() => setMode(null)}
-          onPick={(categoryId) => {
-            // Déplacement optimiste géré par le parent ; on referme aussitôt la
-            // feuille (l'article a déjà rejoint sa nouvelle section).
-            onRecategorize(item.libraryItemId, categoryId)
-            setMode(null)
-          }}
-        />
       )}
 
       {mode === "details" && (
@@ -610,127 +453,6 @@ function ItemRow({
         </p>
       )}
     </li>
-  )
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Feuille « changer de catégorie »                                           */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Bottom-sheet mobile listant les rayons du couple. Sélectionner un rayon
- * change la catégorie du produit (mémoire partagée) ; « Sans rayon » la retire.
- * Le rayon courant est mis en évidence — un `category_id` orphelin (rayon
- * supprimé) retombe sur « Sans rayon » pour ne jamais afficher une coche fantôme.
- */
-function CategorySheet({
-  item,
-  categories,
-  onClose,
-  onPick,
-}: {
-  item: ItemView
-  categories: CategoryView[]
-  onClose: () => void
-  onPick: (categoryId: string | null) => void
-}) {
-  // Ferme à la touche Échap et verrouille le défilement de l'arrière-plan.
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose()
-    }
-    document.addEventListener("keydown", onKey)
-    const prevOverflow = document.body.style.overflow
-    document.body.style.overflow = "hidden"
-    return () => {
-      document.removeEventListener("keydown", onKey)
-      document.body.style.overflow = prevOverflow
-    }
-  }, [onClose])
-
-  // Rayon effectivement actif (null si non rangé OU rayon supprimé).
-  const currentId =
-    item.categoryId && categories.some((c) => c.id === item.categoryId)
-      ? item.categoryId
-      : null
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-end justify-center"
-      role="dialog"
-      aria-modal="true"
-      aria-label={`Changer la catégorie de ${item.name}`}
-    >
-      {/* Voile : ferme au tap. */}
-      <button
-        type="button"
-        aria-label="Fermer"
-        onClick={onClose}
-        className="absolute inset-0 bg-ink/40"
-      />
-
-      {/* Panneau ancré en bas, largeur mobile. */}
-      <div className="relative flex max-h-[75vh] w-full max-w-sm flex-col rounded-t-[14px] border-2 border-ink bg-paper-light shadow-riso-ink">
-        <div className="flex items-start justify-between gap-3 border-b-2 border-dashed border-ink px-4 py-3">
-          <div className="min-w-0">
-            <h3 className="font-display text-[15px] uppercase leading-none text-ink">
-              Changer de catégorie
-            </h3>
-            <p className="mt-1 truncate font-mono text-[11px] text-ink-soft">
-              {item.name}
-            </p>
-          </div>
-          <RisoButton variant="ghost" size="sm" onClick={onClose}>
-            Fermer
-          </RisoButton>
-        </div>
-
-        <ul className="flex flex-col gap-1.5 overflow-y-auto p-3">
-          <li>
-            <CategoryChoice
-              label="Sans rayon"
-              selected={currentId === null}
-              onClick={() => onPick(null)}
-            />
-          </li>
-          {categories.map((c) => (
-            <li key={c.id}>
-              <CategoryChoice
-                label={c.name}
-                selected={currentId === c.id}
-                onClick={() => onPick(c.id)}
-              />
-            </li>
-          ))}
-        </ul>
-      </div>
-    </div>
-  )
-}
-
-/** Une ligne sélectionnable de la feuille de catégories (rayon courant coché). */
-function CategoryChoice({
-  label,
-  selected,
-  onClick,
-}: {
-  label: string
-  selected: boolean
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={selected}
-      className={cn(
-        "flex h-12 w-full items-center justify-between gap-2 rounded-[8px] border-2 border-ink px-3 text-left text-[15px] font-medium text-ink outline-none transition-[transform,box-shadow] focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px active:shadow-none",
-        selected ? "bg-sauge shadow-riso-ink-sm" : "bg-paper-light",
-      )}
-    >
-      <span className="truncate">{label}</span>
-      {selected && <Check className="size-5 shrink-0" strokeWidth={2.5} aria-hidden />}
-    </button>
   )
 }
 

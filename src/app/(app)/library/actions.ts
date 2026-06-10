@@ -84,6 +84,27 @@ async function resolveCategoryId(
   return data?.id ?? null
 }
 
+/**
+ * Vérifie qu'un rayon (`categoryId`) appartient bien au couple courant. `null`
+ * signifie « Sans rayon » et est toujours valide. Borne les `categoryId` reçus
+ * du client (la RLS de `library_items` ne contrôle pas seule la provenance du
+ * `category_id` qu'on y écrit).
+ */
+async function categoryBelongsToCouple(
+  supabase: ServerClient,
+  categoryId: string | null,
+  coupleId: string,
+): Promise<boolean> {
+  if (!categoryId) return true
+  const { data } = await supabase
+    .from("categories")
+    .select("id")
+    .eq("id", categoryId)
+    .eq("couple_id", coupleId)
+    .maybeSingle()
+  return Boolean(data)
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Ajouter un produit directement à la bibliothèque                           */
 /* -------------------------------------------------------------------------- */
@@ -99,8 +120,15 @@ async function resolveCategoryId(
  * Le produit naît avec `usage_count = 0` (réglage par défaut côté base) : il
  * apparaît dans la Bibliothèque mais reste « Rare » tant qu'on ne l'a pas envoyé
  * vers une liste.
+ *
+ * `categoryId` (optionnel) : rayon choisi explicitement à la création. S'il est
+ * fourni et valide on le respecte ; vide / absent → on devine le rayon via
+ * {@link guessCategory}.
  */
-export async function addLibraryItem(rawName: string): Promise<ActionResult> {
+export async function addLibraryItem(
+  rawName: string,
+  categoryId?: string | null,
+): Promise<ActionResult> {
   const name = normalizeItemName(rawName)
   if (!name) return { ok: false, error: "Entre le nom d’un article." }
 
@@ -118,15 +146,27 @@ export async function addLibraryItem(rawName: string): Promise<ActionResult> {
     return { ok: false, error: `« ${name} » est déjà dans ta bibliothèque.` }
   }
 
-  const categoryId = await resolveCategoryId(
-    supabase,
-    coupleId,
-    guessCategory(name),
-  )
+  // Rayon : choix explicite (validé) prioritaire, sinon on le devine.
+  let resolvedCategoryId: string | null
+  if (categoryId) {
+    resolvedCategoryId = (await categoryBelongsToCouple(
+      supabase,
+      categoryId,
+      coupleId,
+    ))
+      ? categoryId
+      : null
+  } else {
+    resolvedCategoryId = await resolveCategoryId(
+      supabase,
+      coupleId,
+      guessCategory(name),
+    )
+  }
 
   const { error } = await supabase
     .from("library_items")
-    .insert({ couple_id: coupleId, name, category_id: categoryId })
+    .insert({ couple_id: coupleId, name, category_id: resolvedCategoryId })
 
   if (error) {
     // 23505 = violation d'unicité (course entre deux ajouts simultanés).
@@ -359,6 +399,80 @@ export async function renameLibraryItem(
       }
     }
     return { ok: false, error: "Renommage impossible. Réessaie." }
+  }
+
+  revalidatePath("/library")
+  for (const listId of new Set((refs ?? []).map((r) => r.list_id))) {
+    revalidatePath(`/lists/${listId}`)
+  }
+  return { ok: true }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Modifier un produit (nom ET rayon) en un seul geste                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Met à jour le nom ET le rayon d'un produit de la bibliothèque en une fois
+ * (panneau d'édition combiné). Comme pour le renommage, ces deux champs vivent
+ * sur `library_items` : la modification se RÉPERCUTE PARTOUT (toutes les listes
+ * qui contiennent l'article), sans copie ligne par ligne. La quantité et la note
+ * (propres à chaque `list_item`) ne sont jamais touchées ici.
+ *
+ *   1. normalise le nom ;
+ *   2. vérifie l'appartenance du produit au couple (borne le `libraryItemId`) ;
+ *   3. vérifie que le rayon cible appartient au couple (`null` = « Sans rayon ») ;
+ *   4. no-op si ni le nom ni le rayon ne changent ;
+ *   5. refuse si un AUTRE produit du couple porte déjà ce nom (unicité).
+ */
+export async function updateLibraryItem(
+  libraryItemId: string,
+  rawName: string,
+  categoryId: string | null,
+): Promise<ActionResult> {
+  const name = normalizeItemName(rawName)
+  if (!name) return { ok: false, error: "Entre un nom d’article." }
+
+  const { supabase, coupleId } = await requireMembership()
+
+  const { data: product } = await supabase
+    .from("library_items")
+    .select("id, name, category_id")
+    .eq("id", libraryItemId)
+    .eq("couple_id", coupleId)
+    .maybeSingle()
+  if (!product) return { ok: false, error: "Article introuvable." }
+
+  if (!(await categoryBelongsToCouple(supabase, categoryId, coupleId))) {
+    return { ok: false, error: "Rayon inconnu." }
+  }
+
+  // Rien à changer (même nom après normalisation ET même rayon).
+  if (product.name === name && (product.category_id ?? null) === categoryId) {
+    return { ok: true }
+  }
+
+  // Listes impactées : on les revalidera pour rafraîchir leur affichage.
+  const { data: refs } = await supabase
+    .from("list_items")
+    .select("list_id")
+    .eq("library_item_id", libraryItemId)
+
+  const { error } = await supabase
+    .from("library_items")
+    .update({ name, category_id: categoryId })
+    .eq("id", libraryItemId)
+    .eq("couple_id", coupleId)
+
+  if (error) {
+    // 23505 = violation d'unicité (un autre produit porte déjà ce nom).
+    if (error.code === "23505") {
+      return {
+        ok: false,
+        error: `« ${name} » existe déjà dans ta bibliothèque.`,
+      }
+    }
+    return { ok: false, error: "Modification impossible. Réessaie." }
   }
 
   revalidatePath("/library")
