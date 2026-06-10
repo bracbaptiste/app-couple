@@ -23,9 +23,7 @@
  */
 
 import {
-  addItemToList,
   deleteItem,
-  moveItemToCategory,
   toggleItem,
   updateItemDetails,
   type ActionResult,
@@ -46,24 +44,12 @@ import {
  * fonctions ni de FormData) pour survivre dans IndexedDB et au rejeu différé.
  *
  * V1 : seules les mutations de l'écran « détail de liste » sont couvertes — ce
- * sont celles du parcours hors ligne visé (cocher / décocher, ajouter, ranger,
- * éditer, supprimer un article). Les actions sur les listes elles-mêmes
- * (créer/renommer/supprimer une liste) et la bibliothèque restent en ligne
- * uniquement pour l'instant.
+ * sont celles du parcours hors ligne visé (cocher / décocher, éditer, supprimer
+ * un article). Les actions sur les listes elles-mêmes (créer/renommer/supprimer
+ * une liste) et la bibliothèque restent en ligne uniquement pour l'instant.
  */
 export type MutationPayloads = {
   toggleItem: { listId: string; itemId: string; checked: boolean }
-  addItem: {
-    listId: string
-    rawName: string
-    quantity?: string | null
-    note?: string | null
-  }
-  moveItemToCategory: {
-    listId: string
-    libraryItemId: string
-    categoryId: string | null
-  }
   updateItemDetails: {
     listId: string
     itemId: string
@@ -80,15 +66,6 @@ const HANDLERS: {
   [K in MutationType]: (payload: MutationPayloads[K]) => Promise<ActionResult>
 } = {
   toggleItem: (p) => toggleItem(p.listId, p.itemId, p.checked),
-  addItem: (p) =>
-    addItemToList({
-      listId: p.listId,
-      rawName: p.rawName,
-      quantity: p.quantity,
-      note: p.note,
-    }),
-  moveItemToCategory: (p) =>
-    moveItemToCategory(p.listId, p.libraryItemId, p.categoryId),
   updateItemDetails: (p) =>
     updateItemDetails(p.listId, p.itemId, p.quantity, p.note),
   deleteItem: (p) => deleteItem(p.listId, p.itemId),
