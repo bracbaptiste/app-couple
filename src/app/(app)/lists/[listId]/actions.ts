@@ -77,25 +77,6 @@ async function assertListOwned(
 /*  Ajout d'un article                                                         */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Adaptateur de formulaire — branché sur le champ « Ajouter un article… » via
- * `addItem.bind(null, listId)` (signature compatible `useActionState`). Délègue
- * toute la logique à {@link addItemToList}. Le champ « name » est requis ;
- * « quantity » / « note » sont optionnels (présents si le formulaire les fournit).
- */
-export async function addItem(
-  listId: string,
-  _prev: ActionResult | null,
-  formData: FormData,
-): Promise<ActionResult> {
-  return addItemToList({
-    listId,
-    rawName: String(formData.get("name") ?? ""),
-    quantity: formData.get("quantity") as string | null,
-    note: formData.get("note") as string | null,
-  })
-}
-
 /** Entrées de {@link addItemToList}. */
 export type AddItemInput = {
   listId: string
@@ -289,52 +270,6 @@ export async function updateItemDetails(
 
   if (error) {
     return { ok: false, error: "Modification impossible. Réessaie." }
-  }
-
-  revalidatePath(`/lists/${listId}`)
-  return { ok: true }
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Modifier la catégorie                                                      */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Change le rayon d'un article. La catégorie est portée par le `library_item`
- * (mémoire de rangement du couple) : on met donc à jour le produit, ce qui le
- * reclasse partout. `categoryId` à `null` = « Sans rayon ».
- */
-export async function moveItemToCategory(
-  listId: string,
-  libraryItemId: string,
-  categoryId: string | null,
-): Promise<ActionResult> {
-  const { supabase, coupleId } = await requireMembership()
-
-  if (!(await assertListOwned(supabase, listId, coupleId))) {
-    return { ok: false, error: "Liste introuvable." }
-  }
-
-  // Vérifie que la catégorie cible appartient bien au couple (la RLS de
-  // library_items ne contrôle pas la provenance du category_id à elle seule).
-  if (categoryId) {
-    const { data: cat } = await supabase
-      .from("categories")
-      .select("id")
-      .eq("id", categoryId)
-      .eq("couple_id", coupleId)
-      .maybeSingle()
-    if (!cat) return { ok: false, error: "Rayon inconnu." }
-  }
-
-  const { error } = await supabase
-    .from("library_items")
-    .update({ category_id: categoryId })
-    .eq("id", libraryItemId)
-    .eq("couple_id", coupleId)
-
-  if (error) {
-    return { ok: false, error: "Changement de rayon impossible. Réessaie." }
   }
 
   revalidatePath(`/lists/${listId}`)
