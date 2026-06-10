@@ -1,15 +1,13 @@
 "use client"
 
-import { Search, Plus, Trash2, Check, X } from "lucide-react"
+import { Search, Plus, Pencil, Trash2, Check, X } from "lucide-react"
 import {
-  useActionState,
   useEffect,
   useMemo,
   useRef,
   useState,
   useTransition,
 } from "react"
-import { useFormStatus } from "react-dom"
 
 import { CategoryHeader } from "@/components/ui/category-header"
 import { RisoButton } from "@/components/ui/riso-button"
@@ -22,7 +20,7 @@ import { FormFeedback } from "@/app/(auth)/form-ui"
 import {
   addLibraryItem,
   deleteLibraryItem,
-  renameLibraryItem,
+  updateLibraryItem,
   sendManyToList,
   type ActionResult,
 } from "./actions"
@@ -54,6 +52,20 @@ export type ListChoice = {
   name: string
 }
 
+/** Un rayon proposé dans les sélecteurs de catégorie (création / édition). */
+export type CategoryChoice = {
+  id: string
+  name: string
+}
+
+/**
+ * Style partagé des `<select>` de rayon (création + édition). Native select :
+ * accessible, clavier/mobile gratuits ; habillé aux codes Riso (bordure encre,
+ * fond crème). La flèche par défaut du navigateur est conservée (lisible).
+ */
+const SELECT_CLASS =
+  "h-11 w-full rounded-[8px] border-2 border-ink bg-paper-light px-3 text-base font-medium text-ink outline-none focus-visible:shadow-riso-sauge"
+
 /** Libellé lisible de chaque palier de fréquence. */
 const FREQUENCY_LABEL: Record<Frequency, string> = {
   4: "Très fréquent",
@@ -71,6 +83,15 @@ function normalize(value: string): string {
 }
 
 /**
+ * Comme `normalize`, mais écrase aussi les espaces superflus (bords + doublons
+ * internes). Sert à comparer « existe déjà ? » pour éviter les doublons du type
+ * "Carottes" vs "carottes ".
+ */
+function normalizeLoose(value: string): string {
+  return normalize(value).replace(/\s+/g, " ").trim()
+}
+
+/**
  * Pilote la Bibliothèque : ajout d'un article, barre de recherche, groupes par
  * rayon, pastilles de fréquence. Le flux principal est la SÉLECTION MULTIPLE :
  * on coche plusieurs produits puis un bouton unique les envoie tous vers une
@@ -79,11 +100,13 @@ function normalize(value: string): string {
 export function LibraryBrowser({
   groups,
   lists,
+  categories,
   total,
   coupleId,
 }: {
   groups: CategoryGroup[]
   lists: ListChoice[]
+  categories: CategoryChoice[]
   total: number
   coupleId: string
 }) {
@@ -105,6 +128,15 @@ export function LibraryBrowser({
   const liveIds = useMemo(() => {
     const set = new Set<string>()
     for (const g of groups) for (const it of g.items) set.add(it.id)
+    return set
+  }, [groups])
+
+  // Noms normalisés des produits existants — pour décider si le texte saisi
+  // correspond déjà à un article (sinon : proposer de l'ajouter).
+  const existingNames = useMemo(() => {
+    const set = new Set<string>()
+    for (const g of groups)
+      for (const it of g.items) set.add(normalizeLoose(it.name))
     return set
   }, [groups])
 
@@ -142,9 +174,11 @@ export function LibraryBrowser({
 
   return (
     <div className="flex flex-col gap-5">
-      <AddLibraryItemField />
-
-      <SearchBar value={query} onChange={setQuery} />
+      <SmartItemField
+        query={query}
+        onChange={setQuery}
+        existingNames={existingNames}
+      />
 
       {total === 0 ? (
         <p className="rounded-[10px] border-2 border-dashed border-ink bg-paper-light px-4 py-6 text-center text-sm text-ink-soft">
@@ -164,6 +198,7 @@ export function LibraryBrowser({
                 <LibraryRow
                   key={item.id}
                   item={item}
+                  categories={categories}
                   selected={selected.has(item.id)}
                   onToggleSelect={() => toggleSelect(item.id)}
                 />
@@ -202,104 +237,86 @@ export function LibraryBrowser({
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Ajouter un article à la bibliothèque                                       */
+/*  Champ intelligent : rechercher OU ajouter un article                       */
 /* -------------------------------------------------------------------------- */
 
 /**
- * Champ d'ajout direct d'un produit à la bibliothèque (sans passer par une
- * liste). Même grammaire visuelle que le champ « Ajouter un article… » du détail
- * de liste : conteneur sauge, icône +, bouton OK. Le champ se vide et garde le
- * focus après un ajout réussi (saisie en rafale).
+ * Une seule barre qui fait les deux à la fois :
+ *  - en tapant, on filtre la liste en dessous (via `onChange` → `query`) ;
+ *  - si le texte saisi ne correspond EXACTEMENT à aucun article existant (casse
+ *    et espaces ignorés) et n'est pas vide, un bouton vert propose de l'ajouter.
+ * Un ajout réussi vide le champ et redonne le focus (saisie en rafale). Le rayon
+ * n'est pas demandé ici : le serveur le devine, ajustable plus tard via le crayon.
  */
-function AddLibraryItemField() {
-  const action = async (
-    _prev: ActionResult | null,
-    formData: FormData,
-  ): Promise<ActionResult> => addLibraryItem(String(formData.get("name") ?? ""))
-
-  const [state, formAction] = useActionState<ActionResult | null, FormData>(
-    action,
-    null,
-  )
-  const formRef = useRef<HTMLFormElement>(null)
+function SmartItemField({
+  query,
+  onChange,
+  existingNames,
+}: {
+  query: string
+  onChange: (next: string) => void
+  existingNames: Set<string>
+}) {
+  const [isPending, startTransition] = useTransition()
+  const [error, setError] = useState<string | undefined>()
   const inputRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => {
-    if (state?.ok) {
-      formRef.current?.reset()
-      inputRef.current?.focus()
-    }
-  }, [state])
+  const trimmed = query.trim()
+  // Existe déjà ? Comparaison insensible à la casse, aux accents et aux espaces.
+  const alreadyExists = existingNames.has(normalizeLoose(query))
+  const canAdd = trimmed.length > 0 && !alreadyExists
 
-  const error = state && !state.ok ? state.error : undefined
+  function add() {
+    if (!canAdd) return
+    setError(undefined)
+    startTransition(async () => {
+      const result = await addLibraryItem(query, null)
+      if (!result.ok) {
+        setError(result.error)
+        return
+      }
+      onChange("")
+      inputRef.current?.focus()
+    })
+  }
 
   return (
     <div className="flex flex-col gap-2">
-      <form ref={formRef} action={formAction}>
-        <div className="flex items-center gap-2 rounded-[10px] border-2 border-ink bg-sauge px-3 shadow-riso-ink focus-within:shadow-riso-brique">
-          <Plus className="size-5 shrink-0 text-ink" strokeWidth={2.5} aria-hidden />
-          <input
-            ref={inputRef}
-            name="name"
-            type="text"
-            inputMode="text"
-            autoComplete="off"
-            placeholder="Ajouter un article à la bibliothèque…"
-            maxLength={60}
-            required
-            aria-label="Ajouter un article à la bibliothèque"
-            className="h-12 w-full bg-transparent text-base font-medium text-ink outline-none placeholder:font-body placeholder:text-ink/55"
-          />
-          <SubmitAdd />
-        </div>
-      </form>
+      <div className="flex items-center gap-2 rounded-[10px] border-2 border-ink bg-paper-light px-3 shadow-riso-ink focus-within:shadow-riso-sauge">
+        <Search className="size-5 shrink-0 text-ink" strokeWidth={2.5} aria-hidden />
+        <input
+          ref={inputRef}
+          type="search"
+          inputMode="search"
+          autoComplete="off"
+          value={query}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && canAdd) {
+              e.preventDefault()
+              add()
+            }
+          }}
+          placeholder="Rechercher ou ajouter un article…"
+          maxLength={60}
+          aria-label="Rechercher ou ajouter un article"
+          className="h-12 w-full bg-transparent text-base font-medium text-ink outline-none placeholder:font-body placeholder:text-ink/55"
+        />
+      </div>
+
+      {canAdd && (
+        <RisoButton
+          size="sm"
+          disabled={isPending}
+          onClick={add}
+          aria-busy={isPending}
+          className="self-start bg-sauge text-ink shadow-riso-ink-sm"
+        >
+          <Plus aria-hidden /> Ajouter « {trimmed} »
+        </RisoButton>
+      )}
+
       <FormFeedback error={error} />
-    </div>
-  )
-}
-
-/** Bouton « OK » d'ajout : désactivé + libellé d'attente pendant l'envoi. */
-function SubmitAdd() {
-  const { pending } = useFormStatus()
-  return (
-    <RisoButton
-      type="submit"
-      size="sm"
-      variant="primary"
-      disabled={pending}
-      aria-busy={pending}
-      className="shrink-0"
-      aria-label="Ajouter"
-    >
-      {pending ? "…" : "OK"}
-    </RisoButton>
-  )
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Barre de recherche                                                         */
-/* -------------------------------------------------------------------------- */
-
-function SearchBar({
-  value,
-  onChange,
-}: {
-  value: string
-  onChange: (next: string) => void
-}) {
-  return (
-    <div className="flex items-center gap-2 rounded-[10px] border-2 border-ink bg-paper-light px-3 shadow-riso-ink focus-within:shadow-riso-sauge">
-      <Search className="size-5 shrink-0 text-ink" strokeWidth={2.5} aria-hidden />
-      <input
-        type="search"
-        inputMode="search"
-        autoComplete="off"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder="Rechercher un article…"
-        aria-label="Rechercher un article"
-        className="h-12 w-full bg-transparent text-base font-medium text-ink outline-none placeholder:font-body placeholder:text-ink/55"
-      />
     </div>
   )
 }
@@ -341,10 +358,12 @@ function FrequencyDots({ frequency }: { frequency: Frequency }) {
 
 function LibraryRow({
   item,
+  categories,
   selected,
   onToggleSelect,
 }: {
   item: LibraryItemView
+  categories: CategoryChoice[]
   selected: boolean
   onToggleSelect: () => void
 }) {
@@ -352,10 +371,8 @@ function LibraryRow({
   // Un seul panneau ouvert à la fois sous la ligne : édition OU suppression.
   const [mode, setMode] = useState<null | "edit" | "delete">(null)
   const [name, setName] = useState(item.name)
+  const [categoryId, setCategoryId] = useState<string | null>(item.categoryId)
   const [error, setError] = useState<string | undefined>()
-  // Évite un double enregistrement : Échap (annulation) déclenche aussi le blur,
-  // ce drapeau dit au `commit` du blur de ne rien faire dans ce cas.
-  const skipCommit = useRef(false)
 
   function run(action: () => Promise<ActionResult>, onSuccess?: () => void) {
     setError(undefined)
@@ -366,31 +383,24 @@ function LibraryRow({
     })
   }
 
-  /** Valide le renommage (Entrée ou perte de focus). No-op si vide / inchangé. */
-  function commit() {
-    if (skipCommit.current) {
-      skipCommit.current = false
-      return
-    }
-    const trimmed = name.trim()
-    if (trimmed === "" || trimmed === item.name) {
-      setName(item.name)
-      setMode(null)
-      setError(undefined)
+  /** Ouvre le panneau d'édition en repartant des valeurs courantes du produit. */
+  function openEdit() {
+    setName(item.name)
+    setCategoryId(item.categoryId)
+    setError(undefined)
+    setMode("edit")
+  }
+
+  /** Enregistre nom + rayon ensemble. No-op géré côté serveur si rien ne change. */
+  function saveEdit() {
+    if (!name.trim()) {
+      setError("Entre un nom d’article.")
       return
     }
     run(
-      () => renameLibraryItem(item.id, name),
+      () => updateLibraryItem(item.id, name, categoryId),
       () => setMode(null),
     )
-  }
-
-  /** Annule l'édition (Échap) et restaure le nom courant sans appel serveur. */
-  function cancel() {
-    skipCommit.current = true
-    setName(item.name)
-    setMode(null)
-    setError(undefined)
   }
 
   const editing = mode === "edit"
@@ -414,67 +424,117 @@ function LibraryRow({
 
         <FrequencyDots frequency={item.frequency} />
 
-        {/* Nom : touche-le pour le renommer directement (pas de bouton crayon).
-            Entrée / clic ailleurs enregistre, Échap annule. La correction se
-            répercute sur toutes les listes contenant l'article. */}
-        {editing ? (
-          <input
-            value={name}
-            disabled={isPending}
-            onChange={(e) => setName(e.target.value)}
-            onBlur={commit}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault()
-                e.currentTarget.blur()
-              } else if (e.key === "Escape") {
-                e.preventDefault()
-                cancel()
-              }
-            }}
-            maxLength={60}
-            aria-label={`Renommer ${item.name}`}
-            autoFocus
-            className="h-10 min-w-0 flex-1 rounded-[8px] border-2 border-ink bg-paper-light px-2.5 text-[15px] font-medium text-ink outline-none focus-visible:shadow-riso-sauge"
-          />
-        ) : (
-          <button
-            type="button"
-            disabled={isPending}
-            onClick={() => {
-              setMode("edit")
-              setError(undefined)
-            }}
-            aria-label={`Renommer ${item.name}`}
-            className="min-w-0 flex-1 rounded-[6px] text-left outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper disabled:opacity-50"
-          >
-            <p className="truncate text-[15px] font-medium leading-tight text-ink">
-              {item.name}
-            </p>
-            <p className="font-mono text-[11px] text-ink-soft">
-              {FREQUENCY_LABEL[item.frequency]} · {item.usageCount} usage
-              {item.usageCount > 1 ? "s" : ""}
-            </p>
-          </button>
-        )}
+        {/* Nom : touche-le pour ouvrir le panneau d'édition (nom + rayon). La
+            modification se répercute sur toutes les listes contenant l'article. */}
+        <button
+          type="button"
+          disabled={isPending}
+          aria-expanded={editing}
+          onClick={() => (editing ? setMode(null) : openEdit())}
+          aria-label={`Modifier ${item.name}`}
+          className="min-w-0 flex-1 rounded-[6px] text-left outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper disabled:opacity-50"
+        >
+          <p className="truncate text-[15px] font-medium leading-tight text-ink">
+            {item.name}
+          </p>
+          <p className="font-mono text-[11px] text-ink-soft">
+            {FREQUENCY_LABEL[item.frequency]} · {item.usageCount} usage
+            {item.usageCount > 1 ? "s" : ""}
+          </p>
+        </button>
 
-        {/* Supprimer (masqué pendant l'édition du nom) */}
-        {!editing && (
-          <button
-            type="button"
-            aria-label={`Supprimer ${item.name}`}
-            aria-expanded={mode === "delete"}
-            disabled={isPending}
-            onClick={() => {
-              setMode((m) => (m === "delete" ? null : "delete"))
-              setError(undefined)
-            }}
-            className="inline-flex size-11 shrink-0 items-center justify-center rounded-[8px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-brique focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px disabled:opacity-50"
-          >
-            <Trash2 className="size-5" strokeWidth={2.5} aria-hidden />
-          </button>
-        )}
+        {/* Modifier (crayon) : ouvre / ferme le même panneau que le tap sur le nom. */}
+        <button
+          type="button"
+          aria-label={`Modifier ${item.name}`}
+          aria-expanded={editing}
+          disabled={isPending}
+          onClick={() => (editing ? setMode(null) : openEdit())}
+          className="inline-flex size-11 shrink-0 items-center justify-center rounded-[8px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px disabled:opacity-50"
+        >
+          <Pencil className="size-5" strokeWidth={2.5} aria-hidden />
+        </button>
+
+        {/* Supprimer */}
+        <button
+          type="button"
+          aria-label={`Supprimer ${item.name}`}
+          aria-expanded={mode === "delete"}
+          disabled={isPending}
+          onClick={() => {
+            setMode((m) => (m === "delete" ? null : "delete"))
+            setError(undefined)
+          }}
+          className="inline-flex size-11 shrink-0 items-center justify-center rounded-[8px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-brique focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px disabled:opacity-50"
+        >
+          <Trash2 className="size-5" strokeWidth={2.5} aria-hidden />
+        </button>
       </div>
+
+      {/* Panneau d'édition combiné : nom + rayon */}
+      {editing && (
+        <div className="mt-2 flex flex-col gap-2 border-t-2 border-dashed border-ink pt-2">
+          <div className="flex flex-col gap-1.5">
+            <label className="font-mono text-[11px] font-bold uppercase tracking-wide text-ink-soft">
+              Nom
+            </label>
+            <input
+              value={name}
+              disabled={isPending}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  saveEdit()
+                } else if (e.key === "Escape") {
+                  e.preventDefault()
+                  setMode(null)
+                  setError(undefined)
+                }
+              }}
+              maxLength={60}
+              autoFocus
+              aria-label={`Renommer ${item.name}`}
+              className="h-11 w-full rounded-[8px] border-2 border-ink bg-paper-light px-3 text-base font-medium text-ink outline-none focus-visible:shadow-riso-sauge"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="font-mono text-[11px] font-bold uppercase tracking-wide text-ink-soft">
+              Rayon
+            </label>
+            <select
+              value={categoryId ?? ""}
+              disabled={isPending}
+              onChange={(e) => setCategoryId(e.target.value || null)}
+              aria-label="Rayon de l’article"
+              className={SELECT_CLASS}
+            >
+              <option value="">Sans rayon</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex gap-1.5">
+            <RisoButton size="sm" disabled={isPending} onClick={saveEdit}>
+              Enregistrer
+            </RisoButton>
+            <RisoButton
+              variant="ghost"
+              size="sm"
+              disabled={isPending}
+              onClick={() => {
+                setMode(null)
+                setError(undefined)
+              }}
+            >
+              Annuler
+            </RisoButton>
+          </div>
+        </div>
+      )}
 
       {/* Confirmation de suppression */}
       {mode === "delete" && (
