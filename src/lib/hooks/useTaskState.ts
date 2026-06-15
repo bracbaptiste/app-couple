@@ -76,3 +76,27 @@ export function getDueLabel(date: string | Date, now: Date = new Date()): string
 
   return dueFormatter.format(value).toUpperCase()
 }
+
+/**
+ * Libellé « il y a Xj » pour une tâche faite (DESIGN_SYSTEM_V2 §2.9).
+ *
+ * Comparaison au jour près (les heures sont ignorées) :
+ *   - même jour → « aujourd'hui »
+ *   - veille    → « hier »
+ *   - sinon     → « il y a Nj »
+ *
+ * Une date future (cas improbable d'horloges désynchronisées) retombe sur
+ * « aujourd'hui » pour éviter un « il y a -2j ».
+ */
+export function getDoneAgoLabel(date: string | Date, now: Date = new Date()): string {
+  const value = toDate(date)
+
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const doneDay = new Date(value.getFullYear(), value.getMonth(), value.getDate())
+
+  const days = Math.round((+today - +doneDay) / (1000 * 60 * 60 * 24))
+
+  if (days <= 0) return "aujourd'hui"
+  if (days === 1) return "hier"
+  return `il y a ${days}j`
+}

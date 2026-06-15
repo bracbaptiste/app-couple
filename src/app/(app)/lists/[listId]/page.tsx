@@ -62,8 +62,9 @@ export default async function ListDetailPage({
   // Routage par type (ARCHITECTURE_V2 §4, option A) : une to-do list rend son
   // propre écran ; on ne déclenche pas le fetch d'articles/rayons des courses.
   if (list.kind === "todo") {
-    // Tâches À FAIRE (is_done = false) + membres (marqueur « ajouté par »).
-    const [tasksRes, membersRes] = await Promise.all([
+    // En parallèle : tâches À FAIRE, 10 dernières tâches FAITES (section « Fait »
+    // §2.8), et membres (marqueur « ajouté par »).
+    const [tasksRes, doneRes, membersRes] = await Promise.all([
       supabase
         .from("tasks")
         .select("id, title, due_date, is_done, added_by, created_at")
@@ -71,19 +72,36 @@ export default async function ListDetailPage({
         .eq("is_done", false)
         .order("created_at", { ascending: true }),
       supabase
+        .from("tasks")
+        .select("id, title, due_date, is_done, added_by, created_at")
+        .eq("list_id", listId)
+        .eq("is_done", true)
+        .order("done_at", { ascending: false })
+        .limit(10),
+      supabase
         .from("profiles")
         .select("id, display_name, color")
         .eq("couple_id", profile.couple_id),
     ])
 
-    const tasks: TaskView[] = (tasksRes.data ?? []).map((row) => ({
+    const toTaskView = (row: {
+      id: string
+      title: string
+      due_date: string | null
+      is_done: boolean
+      added_by: string | null
+      created_at: string | null
+    }): TaskView => ({
       id: row.id,
       title: row.title,
       dueDate: row.due_date,
       isDone: row.is_done,
       addedBy: row.added_by,
       createdAt: row.created_at ?? "",
-    }))
+    })
+
+    const tasks: TaskView[] = (tasksRes.data ?? []).map(toTaskView)
+    const doneTasks: TaskView[] = (doneRes.data ?? []).map(toTaskView)
 
     const todoMembers: TodoMemberView[] = (membersRes.data ?? []).map((m) => ({
       id: m.id,
@@ -98,6 +116,7 @@ export default async function ListDetailPage({
           name={list.name}
           members={todoMembers}
           tasks={tasks}
+          doneTasks={doneTasks}
         />
       </section>
     )

@@ -18,8 +18,11 @@ type TaskMember = {
  * « ajouté par ».
  *
  * État « en retard » (§2.5) : quand `getTaskState` vaut `overdue`, on applique
- * une bordure gauche brique et un titre brique 600. L'état « fait » (§2.6)
- * arrive plus tard.
+ * une bordure gauche brique et un titre brique 600.
+ *
+ * État « fait » (§2.6) : titre barré, ligne atténuée (opacité 0.55) et DueBadge
+ * masqué (peu pertinent une fois la tâche faite). C'est le rendu utilisé dans
+ * la section « Fait » (DonePanel, §2.8).
  */
 type TaskItemProps = {
   /** Identifiant de la tâche (remonté à `onToggle`). */
@@ -44,6 +47,8 @@ function TaskItem({
   member,
   onToggle,
 }: TaskItemProps) {
+  // `getTaskState` renvoie « done » dès que la tâche est cochée : un overdue
+  // coché n'est donc jamais marqué overdue (pas de bordure brique sur un « fait »).
   const isOverdue =
     getTaskState({ isDone, dueDate: dueDate ?? null }) === "overdue"
 
@@ -52,6 +57,7 @@ function TaskItem({
       className={cn(
         "rounded-[10px] border-2 border-ink bg-paper-light p-2",
         isOverdue && "border-l-[6px] border-l-brique",
+        isDone && "opacity-55",
       )}
     >
       <div className="flex items-center gap-1">
@@ -61,20 +67,22 @@ function TaskItem({
           aria-label={isDone ? `Décocher ${title}` : `Cocher ${title}`}
         />
 
-        {/* Titre — Hanken 14px 500 (600 + brique si en retard, §2.5) */}
+        {/* Titre — Hanken 14px 500 (600 + brique si en retard §2.5 ; barré si fait §2.6) */}
         <p
           className={cn(
             "min-w-0 flex-1 truncate text-[14px] leading-tight",
-            isOverdue
-              ? "font-semibold text-brique"
-              : "font-medium text-ink",
+            isDone
+              ? "font-medium text-ink line-through"
+              : isOverdue
+                ? "font-semibold text-brique"
+                : "font-medium text-ink",
           )}
         >
           {title}
         </p>
 
-        {/* Échéance, si présente */}
-        {dueDate && <DueBadge date={dueDate} />}
+        {/* Échéance, si présente — masquée une fois la tâche faite (§2.6) */}
+        {dueDate && !isDone && <DueBadge date={dueDate} />}
 
         {/* Marqueur « ajouté par » */}
         <AddedByMarker

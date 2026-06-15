@@ -1,3 +1,5 @@
+import Link from "next/link"
+import { ChevronRight, History } from "lucide-react"
 import { redirect } from "next/navigation"
 
 import { RisoCard } from "@/components/ui/riso-card"
@@ -113,6 +115,24 @@ export default async function ProfilePage() {
           </p>
         </div>
       </RisoCard>
+
+      {/* Accès à l'historique des tâches faites (lecture seule, §2.9) */}
+      <Link
+        href="/profile/history"
+        className="mb-5 flex items-center gap-3 rounded-[12px] border-2 border-ink bg-paper-light p-4 shadow-riso-ink-sm outline-none transition-transform focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px"
+      >
+        <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-[9px] border-2 border-ink bg-sauge text-ink">
+          <History className="size-5" strokeWidth={2.5} aria-hidden />
+        </span>
+        <span className="flex-1 font-display text-[15px] uppercase text-ink">
+          Historique des tâches
+        </span>
+        <ChevronRight
+          className="size-5 shrink-0 text-ink-soft"
+          strokeWidth={2.5}
+          aria-hidden
+        />
+      </Link>
 
       <ProfileManager
         displayName={profile.display_name}

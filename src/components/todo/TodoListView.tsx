@@ -5,6 +5,7 @@ import { ArrowLeft, Pencil } from "lucide-react"
 import { useMemo, useState, useTransition } from "react"
 
 import { AddTaskBar } from "./AddTaskBar"
+import { DonePanel } from "./DonePanel"
 import { TaskItem } from "./TaskItem"
 import { addTask, toggleTask } from "@/app/(app)/lists/[listId]/task-actions"
 import { sortPendingTasks } from "@/lib/utils/sortTasks"
@@ -35,16 +36,27 @@ type TodoListViewProps = {
   members: TodoMemberView[]
   /** Tâches non faites de la liste (is_done = false), déjà filtrées côté serveur. */
   tasks: TaskView[]
+  /**
+   * 10 tâches faites les plus récentes (is_done = true, triées `done_at` desc),
+   * pour la section « Fait » (DonePanel §2.8).
+   */
+  doneTasks: TaskView[]
 }
 
 /**
  * Écran d'une to-do list (kind = 'todo').
  *
  * AddTaskBar + liste des tâches à faire, triées par urgence (ARCHITECTURE_V2
- * §4.3) : en retard → aujourd'hui/demain → futur → sans échéance. La section
- * « Fait » (§2.8) arrive à l'étape suivante.
+ * §4.3) : en retard → aujourd'hui/demain → futur → sans échéance. En bas, la
+ * section « Fait » repliable (DonePanel §2.8).
  */
-export function TodoListView({ listId, name, members, tasks }: TodoListViewProps) {
+export function TodoListView({
+  listId,
+  name,
+  members,
+  tasks,
+  doneTasks,
+}: TodoListViewProps) {
   // Index prénom/couleur par id de profil, pour le marqueur « ajouté par ».
   const membersById = useMemo(() => {
     const map = new Map<string, TodoMemberView>()
@@ -115,24 +127,37 @@ export function TodoListView({ listId, name, members, tasks }: TodoListViewProps
           </p>
         )}
 
-        {tasks.length === 0 ? (
+        {tasks.length === 0 && doneTasks.length === 0 ? (
           <p className="rounded-[10px] border-2 border-dashed border-ink bg-paper-light px-4 py-6 text-center text-sm text-ink-soft">
             Aucune tâche pour l’instant. Ajoute-en une ci-dessus.
           </p>
         ) : (
-          <ul className="flex flex-col gap-2">
-            {sortedTasks.map((task) => (
-              <TaskItem
-                key={task.id}
-                id={task.id}
-                title={task.title}
-                dueDate={task.dueDate}
-                isDone={task.isDone}
-                member={task.addedBy ? membersById.get(task.addedBy) ?? null : null}
-                onToggle={handleToggle}
-              />
-            ))}
-          </ul>
+          <>
+            {tasks.length > 0 && (
+              <ul className="flex flex-col gap-2">
+                {sortedTasks.map((task) => (
+                  <TaskItem
+                    key={task.id}
+                    id={task.id}
+                    title={task.title}
+                    dueDate={task.dueDate}
+                    isDone={task.isDone}
+                    member={
+                      task.addedBy ? membersById.get(task.addedBy) ?? null : null
+                    }
+                    onToggle={handleToggle}
+                  />
+                ))}
+              </ul>
+            )}
+
+            {/* Section « Fait » repliable (§2.8) */}
+            <DonePanel
+              tasks={doneTasks}
+              membersById={membersById}
+              onToggle={handleToggle}
+            />
+          </>
         )}
       </div>
     </div>
