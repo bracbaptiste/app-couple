@@ -47,7 +47,16 @@ async function requireMembership(): Promise<{
   return { supabase, userId: user.id, coupleId: profile.couple_id }
 }
 
-/** Crée une nouvelle liste à la fin (position = max + 1). */
+/**
+ * Crée une nouvelle liste (courses ou to-do), partagée ou perso.
+ *
+ * - `kind` : "courses" (défaut) ou "todo" — figé à la création (PRD_V2 §2.1).
+ * - `share` : "on" => liste partagée avec la conjointe ; absent => liste perso
+ *   (visible du seul créateur). `owner_id` = créateur si perso, `null` sinon —
+ *   miroir des policies RLS `lists_*_accessible` (is_shared OR owner_id = uid).
+ * - `position` : placée en fin de SON groupe (max(position) + 1 parmi les listes
+ *   de même `kind`), pour ne pas bousculer l'ordre de l'autre groupe.
+ */
 export async function createList(
   _prev: ActionResult | null,
   formData: FormData,
@@ -55,12 +64,19 @@ export async function createList(
   const name = clamp(formData.get("name"), NAME_MAX)
   if (!name) return { ok: false, error: "Entre un nom de liste." }
 
+  // Type de liste : on n'accepte que les deux valeurs connues, défaut courses.
+  const kind = formData.get("kind") === "todo" ? "todo" : "courses"
+  const isShared = formData.get("share") === "on"
+
   const { supabase, userId, coupleId } = await requireMembership()
 
+  // Dernière position DU GROUPE (même kind) : on étend ce groupe sans décaler
+  // l'autre.
   const { data: last } = await supabase
     .from("lists")
     .select("position")
     .eq("couple_id", coupleId)
+    .eq("kind", kind)
     .order("position", { ascending: false })
     .limit(1)
     .maybeSingle()
@@ -70,6 +86,10 @@ export async function createList(
   const { error } = await supabase.from("lists").insert({
     couple_id: coupleId,
     name,
+    kind,
+    is_shared: isShared,
+    // Perso => rattachée à son créateur ; partagée => pas de propriétaire unique.
+    owner_id: isShared ? null : userId,
     position: nextPosition,
     created_by: userId,
   })

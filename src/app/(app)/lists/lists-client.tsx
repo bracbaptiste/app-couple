@@ -1,20 +1,20 @@
 "use client"
 
 import Link from "next/link"
-import { Pencil, Plus, Trash2, X } from "lucide-react"
-import { useEffect, useRef, useState, useTransition, useActionState } from "react"
-import { useFormStatus } from "react-dom"
+import { Pencil, Plus, Trash2 } from "lucide-react"
+import { useState, useTransition } from "react"
 
 import { RisoButton } from "@/components/ui/riso-button"
 import { RisoCard } from "@/components/ui/riso-card"
 import { RisoInput } from "@/components/ui/riso-input"
-import { Field, FormFeedback } from "@/app/(auth)/form-ui"
+import { SectionMarker } from "@/components/lists/SectionMarker"
+import { SharedBadge } from "@/components/shared/SharedBadge"
+import { NewListSheet } from "@/components/lists/NewListSheet"
 import { useRealtimeLists } from "@/lib/realtime"
 import { useOfflineCache } from "@/lib/offline/use-offline-cache"
 
 import {
   clearCheckedItems,
-  createList,
   deleteList,
   renameList,
   type ActionResult,
@@ -23,6 +23,10 @@ import {
 export type ListView = {
   id: string
   name: string
+  /** Type de liste : courses (V1) ou to-do (V2). */
+  kind: "courses" | "todo"
+  /** Liste partagée avec la conjointe (affiche le badge « Partagé »). */
+  isShared: boolean
   /** Nombre total d'articles. */
   total: number
   /** Nombre d'articles non cochés (restant à acheter). */
@@ -51,9 +55,12 @@ function formatUpdatedAt(iso: string | null): string | null {
 export function ListsManager({
   lists,
   coupleId,
+  partnerName,
 }: {
   lists: ListView[]
   coupleId: string
+  /** Prénom de la conjointe pour la case « Partager » du sheet (null si seul). */
+  partnerName: string | null
 }) {
   // Temps réel : un changement de liste ou d'article côté partenaire rafraîchit
   // la grille (décomptes + dernière activité) sans refresh manuel.
@@ -62,9 +69,13 @@ export function ListsManager({
   // Cache de lecture (fondation hors ligne) : on garde la dernière grille connue.
   useOfflineCache("lists", lists)
 
-  // Le formulaire de création est replié par défaut : un bouton « + » le déploie
-  // pour garder le hub épuré quand on consulte simplement ses listes.
+  // Le bouton « + » ouvre le sheet de création (PRD_V2 §2.3).
   const [creating, setCreating] = useState(false)
+
+  // Regroupement par type pour le hub V2 (l'ordre interne — par position — est
+  // préservé puisque `lists` arrive déjà trié).
+  const todoLists = lists.filter((l) => l.kind === "todo")
+  const coursesLists = lists.filter((l) => l.kind === "courses")
 
   return (
     <div className="flex flex-col gap-5">
@@ -73,21 +84,21 @@ export function ListsManager({
           <h1 className="font-display text-xl uppercase text-ink">Listes</h1>
           <button
             type="button"
-            aria-expanded={creating}
-            aria-label={creating ? "Fermer le formulaire" : "Nouvelle liste"}
-            onClick={() => setCreating((c) => !c)}
+            aria-haspopup="dialog"
+            aria-label="Nouvelle liste"
+            onClick={() => setCreating(true)}
             className="ml-auto inline-flex size-11 shrink-0 items-center justify-center rounded-[8px] border-2 border-ink bg-brique text-paper-light shadow-riso-ink-sm outline-none transition-[transform,box-shadow] focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px active:shadow-none"
           >
-            {creating ? (
-              <X className="size-5" strokeWidth={2.5} aria-hidden />
-            ) : (
-              <Plus className="size-5" strokeWidth={2.5} aria-hidden />
-            )}
+            <Plus className="size-5" strokeWidth={2.5} aria-hidden />
           </button>
         </div>
-
-        {creating && <CreateListForm onCreated={() => setCreating(false)} />}
       </div>
+
+      <NewListSheet
+        open={creating}
+        onOpenChange={setCreating}
+        partnerName={partnerName}
+      />
 
       {lists.length === 0 ? (
         <RisoCard shadow="sauge">
@@ -97,79 +108,42 @@ export function ListsManager({
           </p>
         </RisoCard>
       ) : (
-        <ul className="flex flex-col gap-3.5">
-          {lists.map((list, index) => (
-            <ListTile
-              key={list.id}
-              list={list}
-              shadow={index % 2 === 0 ? "sauge" : "brique"}
-            />
-          ))}
-        </ul>
+        <>
+          {/* Regroupement par type (PRD_V2 §3.1) : to-do en premier, courses
+              ensuite. Le tampon de section n'apparaît que si son groupe existe. */}
+          {todoLists.length > 0 && (
+            <ListGroup kind="todo" lists={todoLists} />
+          )}
+          {coursesLists.length > 0 && (
+            <ListGroup kind="courses" lists={coursesLists} />
+          )}
+        </>
       )}
     </div>
   )
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Création                                                                   */
-/* -------------------------------------------------------------------------- */
-
-function CreateListForm({ onCreated }: { onCreated?: () => void }) {
-  const [state, formAction] = useActionState<ActionResult | null, FormData>(
-    createList,
-    null,
-  )
-  const formRef = useRef<HTMLFormElement>(null)
-
-  // Réinitialise le champ et replie le panneau après une création réussie.
-  useEffect(() => {
-    if (state?.ok) {
-      formRef.current?.reset()
-      onCreated?.()
-    }
-  }, [state, onCreated])
-
-  const error = state && !state.ok ? state.error : undefined
-
+/** Un groupe de listes d'un même type, précédé de son tampon de section. */
+function ListGroup({
+  kind,
+  lists,
+}: {
+  kind: "courses" | "todo"
+  lists: ListView[]
+}) {
   return (
-    <RisoCard shadow="ink" padding="lg">
-      <h2 className="mb-4 font-display text-lg uppercase text-ink">
-        Nouvelle liste
-      </h2>
-      <form ref={formRef} action={formAction} className="flex flex-col gap-3">
-        <Field label="Nom de la liste" htmlFor="new_list">
-          <div className="flex gap-2">
-            <RisoInput
-              id="new_list"
-              name="name"
-              type="text"
-              placeholder="Ex : Courses de la semaine"
-              maxLength={50}
-              autoFocus
-              required
-            />
-            <CreateSubmit />
-          </div>
-        </Field>
-        <FormFeedback error={error} />
-      </form>
-    </RisoCard>
-  )
-}
-
-/** Bouton « Créer » : désactivé + libellé d'attente pendant l'envoi. */
-function CreateSubmit() {
-  const { pending } = useFormStatus()
-  return (
-    <RisoButton
-      type="submit"
-      disabled={pending}
-      aria-busy={pending}
-      className="h-12 shrink-0 px-4 text-sm"
-    >
-      {pending ? "…" : "Créer"}
-    </RisoButton>
+    <div className="flex flex-col gap-2">
+      <SectionMarker kind={kind} />
+      <ul className="flex flex-col gap-3.5">
+        {lists.map((list, index) => (
+          <ListTile
+            key={list.id}
+            list={list}
+            shadow={index % 2 === 0 ? "sauge" : "brique"}
+          />
+        ))}
+      </ul>
+    </div>
   )
 }
 
@@ -204,10 +178,20 @@ function ListTile({
   const updatedLabel = formatUpdatedAt(list.updatedAt)
   // Articles « déjà pris » (cochés) que « Vider la liste » retirerait.
   const checked = Math.max(0, list.total - list.unchecked)
+  // Les tuiles to-do ont un layout épuré : pas de bouton « Vider la liste »,
+  // crayon remonté en haut à droite, sans séparateurs pointillés.
+  const isTodo = list.kind === "todo"
 
   return (
     <li>
-      <RisoCard shadow={shadow} padding="default">
+      <RisoCard shadow={shadow} padding="default" className="relative">
+        {/* Badge « Partagé » (DESIGN_SYSTEM_V2 §1.2 / §2.1) — coin haut droite.
+            Sur les to-do, il est rendu en ligne avec le crayon (voir plus bas). */}
+        {list.isShared && !isTodo && (
+          <div className="absolute right-[10px] top-[10px] z-10">
+            <SharedBadge />
+          </div>
+        )}
         {mode === "edit" ? (
           /* --- Mode renommage --- */
           <div className="flex flex-col gap-3">
@@ -242,60 +226,93 @@ function ListTile({
         ) : (
           /* --- Mode lecture : la tuile entière ouvre la liste --- */
           <>
-            <Link
-              href={`/lists/${list.id}`}
-              className="block rounded-[8px] outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
-            >
-              <h3 className="font-display text-lg uppercase leading-tight text-ink">
-                {list.name}
-              </h3>
-              <div className="mt-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                <span className="font-display text-2xl leading-none text-ink">
-                  {list.unchecked}
-                </span>
-                <span className="font-mono text-[11px] text-ink-soft">
-                  à acheter · {list.total} au total
-                </span>
-              </div>
-              {updatedLabel && (
-                <p className="mt-1 font-mono text-[11px] text-ink-soft">
-                  Modifiée le {updatedLabel}
-                </p>
-              )}
-            </Link>
+            <div className={isTodo ? "flex items-start gap-2" : undefined}>
+              <Link
+                href={`/lists/${list.id}`}
+                className={`block rounded-[8px] outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper${
+                  isTodo ? " min-w-0 flex-1" : ""
+                }`}
+              >
+                <h3 className="font-display text-lg uppercase leading-tight text-ink">
+                  {list.name}
+                </h3>
+                <div className="mt-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                  <span className="font-display text-2xl leading-none text-ink">
+                    {list.unchecked}
+                  </span>
+                  <span className="font-mono text-[11px] text-ink-soft">
+                    {list.kind === "todo" ? "à faire" : "à acheter"} ·{" "}
+                    {list.total} au total
+                  </span>
+                </div>
+                {updatedLabel && (
+                  <p className="mt-1 font-mono text-[11px] text-ink-soft">
+                    Modifiée le {updatedLabel}
+                  </p>
+                )}
+              </Link>
 
-            {/* Action principale : vider les « déjà pris ». Le crayon ouvre le
-                menu discret (renommer / supprimer la liste). */}
-            <div className="mt-3 flex items-center gap-1.5 border-t-2 border-dashed border-ink pt-3">
-              <RisoButton
-                variant="secondary"
-                size="sm"
-                disabled={isPending || checked === 0}
-                onClick={() => setMode("clear")}
-                title={
-                  checked === 0 ? "Rien à vider (aucun article coché)" : undefined
-                }
-              >
-                Vider la liste
-                {checked > 0 ? ` · ${checked}` : ""}
-              </RisoButton>
-              <button
-                type="button"
-                aria-label="Modifier la liste"
-                aria-expanded={mode === "menu"}
-                disabled={isPending}
-                onClick={() => setMode((m) => (m === "menu" ? null : "menu"))}
-                className="ml-auto inline-flex size-11 shrink-0 items-center justify-center rounded-[8px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px disabled:opacity-50"
-              >
-                <Pencil className="size-5" strokeWidth={2.5} aria-hidden />
-              </button>
+              {/* To-do : crayon (et badge « Partagé ») en haut à droite, en face
+                  du nom. Le crayon ouvre le menu discret renommer / supprimer. */}
+              {isTodo && (
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {list.isShared && <SharedBadge />}
+                  <button
+                    type="button"
+                    aria-label="Modifier la liste"
+                    aria-expanded={mode === "menu"}
+                    disabled={isPending}
+                    onClick={() =>
+                      setMode((m) => (m === "menu" ? null : "menu"))
+                    }
+                    className="-mr-1 -mt-1 inline-flex size-11 shrink-0 items-center justify-center rounded-[8px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px disabled:opacity-50"
+                  >
+                    <Pencil className="size-5" strokeWidth={2.5} aria-hidden />
+                  </button>
+                </div>
+              )}
             </div>
+
+            {/* Courses : action principale « vider les déjà pris » + crayon,
+                séparés par un trait pointillé. */}
+            {!isTodo && (
+              <div className="mt-3 flex items-center gap-1.5 border-t-2 border-dashed border-ink pt-3">
+                <RisoButton
+                  variant="secondary"
+                  size="sm"
+                  disabled={isPending || checked === 0}
+                  onClick={() => setMode("clear")}
+                  title={
+                    checked === 0
+                      ? "Rien à vider (aucun article coché)"
+                      : undefined
+                  }
+                >
+                  Vider la liste
+                  {checked > 0 ? ` · ${checked}` : ""}
+                </RisoButton>
+                <button
+                  type="button"
+                  aria-label="Modifier la liste"
+                  aria-expanded={mode === "menu"}
+                  disabled={isPending}
+                  onClick={() => setMode((m) => (m === "menu" ? null : "menu"))}
+                  className="ml-auto inline-flex size-11 shrink-0 items-center justify-center rounded-[8px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px disabled:opacity-50"
+                >
+                  <Pencil className="size-5" strokeWidth={2.5} aria-hidden />
+                </button>
+              </div>
+            )}
           </>
         )}
 
         {/* Menu discret du crayon : renommer ou supprimer la liste */}
         {mode === "menu" && (
-          <div className="mt-3 flex flex-wrap gap-1.5 border-t-2 border-dashed border-ink pt-3">
+          <div
+            className={`mt-3 flex flex-wrap gap-1.5${
+              isTodo ? "" : " border-t-2 border-dashed border-ink pt-3"
+            }`}
+          >
             <RisoButton
               variant="secondary"
               size="sm"
@@ -350,7 +367,11 @@ function ListTile({
 
         {/* Confirmation de suppression */}
         {mode === "delete" && (
-          <div className="mt-3 flex flex-col gap-2 border-t-2 border-dashed border-ink pt-3">
+          <div
+            className={`mt-3 flex flex-col gap-2${
+              isTodo ? "" : " border-t-2 border-dashed border-ink pt-3"
+            }`}
+          >
             <p className="text-[12px] leading-snug text-ink">
               Supprimer définitivement la liste « {list.name} »
               {list.total > 0

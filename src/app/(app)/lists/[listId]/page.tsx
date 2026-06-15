@@ -11,6 +11,11 @@ import {
   type ItemView,
   type MemberView,
 } from "./list-detail-client"
+import {
+  TodoListView,
+  type TaskView,
+  type TodoMemberView,
+} from "@/components/todo/TodoListView"
 
 type Color = "sauge" | "brique"
 
@@ -47,12 +52,75 @@ export default async function ListDetailPage({
 
   const { data: list } = await supabase
     .from("lists")
-    .select("id, name")
+    .select("id, name, kind")
     .eq("id", listId)
     .eq("couple_id", profile.couple_id)
     .maybeSingle()
 
   if (!list) notFound()
+
+  // Routage par type (ARCHITECTURE_V2 §4, option A) : une to-do list rend son
+  // propre écran ; on ne déclenche pas le fetch d'articles/rayons des courses.
+  if (list.kind === "todo") {
+    // En parallèle : tâches À FAIRE, 10 dernières tâches FAITES (section « Fait »
+    // §2.8), et membres (marqueur « ajouté par »).
+    const [tasksRes, doneRes, membersRes] = await Promise.all([
+      supabase
+        .from("tasks")
+        .select("id, title, due_date, is_done, added_by, created_at")
+        .eq("list_id", listId)
+        .eq("is_done", false)
+        .order("created_at", { ascending: true }),
+      supabase
+        .from("tasks")
+        .select("id, title, due_date, is_done, added_by, created_at")
+        .eq("list_id", listId)
+        .eq("is_done", true)
+        .order("done_at", { ascending: false })
+        .limit(10),
+      supabase
+        .from("profiles")
+        .select("id, display_name, color")
+        .eq("couple_id", profile.couple_id),
+    ])
+
+    const toTaskView = (row: {
+      id: string
+      title: string
+      due_date: string | null
+      is_done: boolean
+      added_by: string | null
+      created_at: string | null
+    }): TaskView => ({
+      id: row.id,
+      title: row.title,
+      dueDate: row.due_date,
+      isDone: row.is_done,
+      addedBy: row.added_by,
+      createdAt: row.created_at ?? "",
+    })
+
+    const tasks: TaskView[] = (tasksRes.data ?? []).map(toTaskView)
+    const doneTasks: TaskView[] = (doneRes.data ?? []).map(toTaskView)
+
+    const todoMembers: TodoMemberView[] = (membersRes.data ?? []).map((m) => ({
+      id: m.id,
+      name: m.display_name || "?",
+      color: asColor(m.color),
+    }))
+
+    return (
+      <section className="mx-auto w-full max-w-sm">
+        <TodoListView
+          listId={list.id}
+          name={list.name}
+          members={todoMembers}
+          tasks={tasks}
+          doneTasks={doneTasks}
+        />
+      </section>
+    )
+  }
 
   // Articles + produit lié, rayons, membres : en parallèle (pas de N+1).
   const [itemsRes, categoriesRes, membersRes] = await Promise.all([
