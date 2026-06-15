@@ -11,7 +11,11 @@ import {
   type ItemView,
   type MemberView,
 } from "./list-detail-client"
-import { TodoListView } from "@/components/todo/TodoListView"
+import {
+  TodoListView,
+  type TaskView,
+  type TodoMemberView,
+} from "@/components/todo/TodoListView"
 
 type Color = "sauge" | "brique"
 
@@ -58,9 +62,42 @@ export default async function ListDetailPage({
   // Routage par type (ARCHITECTURE_V2 §4, option A) : une to-do list rend son
   // propre écran ; on ne déclenche pas le fetch d'articles/rayons des courses.
   if (list.kind === "todo") {
+    // Tâches À FAIRE (is_done = false) + membres (marqueur « ajouté par »).
+    const [tasksRes, membersRes] = await Promise.all([
+      supabase
+        .from("tasks")
+        .select("id, title, due_date, is_done, added_by")
+        .eq("list_id", listId)
+        .eq("is_done", false)
+        .order("created_at", { ascending: true }),
+      supabase
+        .from("profiles")
+        .select("id, display_name, color")
+        .eq("couple_id", profile.couple_id),
+    ])
+
+    const tasks: TaskView[] = (tasksRes.data ?? []).map((row) => ({
+      id: row.id,
+      title: row.title,
+      dueDate: row.due_date,
+      isDone: row.is_done,
+      addedBy: row.added_by,
+    }))
+
+    const todoMembers: TodoMemberView[] = (membersRes.data ?? []).map((m) => ({
+      id: m.id,
+      name: m.display_name || "?",
+      color: asColor(m.color),
+    }))
+
     return (
       <section className="mx-auto w-full max-w-sm">
-        <TodoListView name={list.name} />
+        <TodoListView
+          listId={list.id}
+          name={list.name}
+          members={todoMembers}
+          tasks={tasks}
+        />
       </section>
     )
   }
