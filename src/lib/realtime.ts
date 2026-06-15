@@ -33,7 +33,7 @@ const REFRESH_DEBOUNCE_MS = 250
 
 /** Une table à écouter, avec un filtre optionnel `colonne=eq.valeur`. */
 type Subscription = {
-  table: "lists" | "list_items" | "library_items" | "categories"
+  table: "lists" | "list_items" | "library_items" | "categories" | "tasks"
   /** Ex. `couple_id=eq.<uuid>` ou `list_id=eq.<uuid>`. Omis = toute la table (sous RLS). */
   filter?: string
 }
@@ -121,6 +121,21 @@ export function useRealtimeListItems(listId: string, coupleId: string) {
     { table: "list_items", filter: `list_id=eq.${listId}` },
     { table: "library_items", filter: `couple_id=eq.${coupleId}` },
     { table: "categories", filter: `couple_id=eq.${coupleId}` },
+  ])
+}
+
+/**
+ * Détail d'une to-do list (/lists/[listId], kind = 'todo'). Écoute :
+ *   - `tasks` de CETTE liste (ajout / cochage / renommage / échéance / suppression).
+ *
+ * Le partenaire ajoute une tâche ou en coche une → l'écran se rafraîchit sans
+ * refresh manuel (cf. ARCHITECTURE_V2). On filtre par `list_id` pour ne traiter
+ * que les events de la liste ouverte ; la RLS de `tasks` reste la barrière de
+ * sécurité (un autre couple ne reçoit jamais d'event).
+ */
+export function useRealtimeTasks(listId: string) {
+  useRealtimeRefresh(`todo-detail:${listId}`, [
+    { table: "tasks", filter: `list_id=eq.${listId}` },
   ])
 }
 

@@ -8,6 +8,7 @@ import { AddTaskBar } from "./AddTaskBar"
 import { DonePanel } from "./DonePanel"
 import { TaskItem } from "./TaskItem"
 import { addTask, toggleTask } from "@/app/(app)/lists/[listId]/task-actions"
+import { useRealtimeTasks } from "@/lib/realtime"
 import { sortPendingTasks } from "@/lib/utils/sortTasks"
 
 type Color = "sauge" | "brique"
@@ -57,6 +58,12 @@ export function TodoListView({
   tasks,
   doneTasks,
 }: TodoListViewProps) {
+  // Temps réel : ajout / cochage / modif / suppression d'une tâche côté
+  // partenaire (sur CETTE liste) rafraîchit l'écran sans refresh manuel.
+  // `refresh()` ne met à jour que la donnée serveur de base ; l'optimiste local
+  // (useTransition) reste prioritaire pendant les mutations en cours.
+  useRealtimeTasks(listId)
+
   // Index prénom/couleur par id de profil, pour le marqueur « ajouté par ».
   const membersById = useMemo(() => {
     const map = new Map<string, TodoMemberView>()
