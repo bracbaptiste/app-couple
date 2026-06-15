@@ -7,6 +7,7 @@ import { useMemo, useState, useTransition } from "react"
 import { AddTaskBar } from "./AddTaskBar"
 import { TaskItem } from "./TaskItem"
 import { addTask, toggleTask } from "@/app/(app)/lists/[listId]/task-actions"
+import { sortPendingTasks } from "@/lib/utils/sortTasks"
 
 type Color = "sauge" | "brique"
 
@@ -24,6 +25,8 @@ export type TaskView = {
   dueDate: string | null
   isDone: boolean
   addedBy: string | null
+  /** Date de création ISO — départage le tri des tâches sans échéance. */
+  createdAt: string
 }
 
 type TodoListViewProps = {
@@ -37,9 +40,9 @@ type TodoListViewProps = {
 /**
  * Écran d'une to-do list (kind = 'todo').
  *
- * ÉTAPE COURANTE : AddTaskBar + liste des tâches à faire. Le tri par échéance
- * (retard / bientôt / futur), la section « Fait » (§2.8) et le sélecteur de date
- * arrivent aux étapes suivantes.
+ * AddTaskBar + liste des tâches à faire, triées par urgence (ARCHITECTURE_V2
+ * §4.3) : en retard → aujourd'hui/demain → futur → sans échéance. La section
+ * « Fait » (§2.8) arrive à l'étape suivante.
  */
 export function TodoListView({ listId, name, members, tasks }: TodoListViewProps) {
   // Index prénom/couleur par id de profil, pour le marqueur « ajouté par ».
@@ -48,6 +51,9 @@ export function TodoListView({ listId, name, members, tasks }: TodoListViewProps
     for (const m of members) map.set(m.id, m)
     return map
   }, [members])
+
+  // Tri par urgence (retard d'abord, sans échéance en bas).
+  const sortedTasks = useMemo(() => sortPendingTasks(tasks), [tasks])
 
   const [isPending, startTransition] = useTransition()
   const [error, setError] = useState<string | undefined>()
@@ -115,7 +121,7 @@ export function TodoListView({ listId, name, members, tasks }: TodoListViewProps
           </p>
         ) : (
           <ul className="flex flex-col gap-2">
-            {tasks.map((task) => (
+            {sortedTasks.map((task) => (
               <TaskItem
                 key={task.id}
                 id={task.id}

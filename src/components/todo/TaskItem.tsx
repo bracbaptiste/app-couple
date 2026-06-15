@@ -1,6 +1,7 @@
 import { AddedByMarker } from "@/components/ui/added-by-marker"
 import { RisoCheckbox } from "@/components/ui/riso-checkbox"
 import { cn } from "@/lib/utils"
+import { getTaskState } from "@/lib/hooks/useTaskState"
 
 import { DueBadge } from "./DueBadge"
 
@@ -16,8 +17,9 @@ type TaskMember = {
  * Structure : case à cocher · titre · DueBadge (si échéance) · marqueur
  * « ajouté par ».
  *
- * ÉTAPE COURANTE : affichage de base uniquement. Les états « en retard » (§2.5)
- * et « fait » (§2.6) — bordure brique, line-through, etc. — arrivent plus tard.
+ * État « en retard » (§2.5) : quand `getTaskState` vaut `overdue`, on applique
+ * une bordure gauche brique et un titre brique 600. L'état « fait » (§2.6)
+ * arrive plus tard.
  */
 type TaskItemProps = {
   /** Identifiant de la tâche (remonté à `onToggle`). */
@@ -42,8 +44,16 @@ function TaskItem({
   member,
   onToggle,
 }: TaskItemProps) {
+  const isOverdue =
+    getTaskState({ isDone, dueDate: dueDate ?? null }) === "overdue"
+
   return (
-    <li className="rounded-[10px] border-2 border-ink bg-paper-light p-2">
+    <li
+      className={cn(
+        "rounded-[10px] border-2 border-ink bg-paper-light p-2",
+        isOverdue && "border-l-[6px] border-l-brique",
+      )}
+    >
       <div className="flex items-center gap-1">
         <RisoCheckbox
           checked={isDone}
@@ -51,8 +61,15 @@ function TaskItem({
           aria-label={isDone ? `Décocher ${title}` : `Cocher ${title}`}
         />
 
-        {/* Titre — Hanken 14px 500 */}
-        <p className="min-w-0 flex-1 truncate text-[14px] font-medium leading-tight text-ink">
+        {/* Titre — Hanken 14px 500 (600 + brique si en retard, §2.5) */}
+        <p
+          className={cn(
+            "min-w-0 flex-1 truncate text-[14px] leading-tight",
+            isOverdue
+              ? "font-semibold text-brique"
+              : "font-medium text-ink",
+          )}
+        >
           {title}
         </p>
 

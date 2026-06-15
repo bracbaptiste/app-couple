@@ -66,7 +66,7 @@ export default async function ListDetailPage({
     const [tasksRes, membersRes] = await Promise.all([
       supabase
         .from("tasks")
-        .select("id, title, due_date, is_done, added_by")
+        .select("id, title, due_date, is_done, added_by, created_at")
         .eq("list_id", listId)
         .eq("is_done", false)
         .order("created_at", { ascending: true }),
@@ -82,6 +82,7 @@ export default async function ListDetailPage({
       dueDate: row.due_date,
       isDone: row.is_done,
       addedBy: row.added_by,
+      createdAt: row.created_at ?? "",
     }))
 
     const todoMembers: TodoMemberView[] = (membersRes.data ?? []).map((m) => ({

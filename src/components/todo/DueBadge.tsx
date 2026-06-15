@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils"
+import { getDueLabel } from "@/lib/hooks/useTaskState"
 
 /**
  * DueBadge — étiquette d'échéance d'une tâche (DESIGN_SYSTEM_V2 §2.4).
@@ -6,39 +7,38 @@ import { cn } from "@/lib/utils"
  * Silkscreen 10px MAJ, padding 3-6, bordure 1.5px encre, radius 4. Placée à
  * droite du titre, juste avant le marqueur « ajouté par ».
  *
- * ÉTAPE COURANTE : affiche TOUJOURS la date au format « JEU. 20 JUIN » (fr-FR).
- * Les variantes visuelles « AUJOURD'HUI » / « DEMAIN » / « EN RETARD » (fond
- * sauge ou brique selon l'urgence, cf. §2.4) arrivent à l'étape suivante.
+ * Le texte vient de {@link getDueLabel} (EN RETARD / AUJOURD'HUI / DEMAIN /
+ * « JEU. 20 JUIN »). Le style varie selon l'urgence :
+ *   - EN RETARD              → fond brique, texte paper-light
+ *   - AUJOURD'HUI / DEMAIN   → fond sauge, texte ink
+ *   - sinon                  → fond paper-light, texte ink-soft (défaut)
  */
 type DueBadgeProps = Omit<React.ComponentProps<"span">, "children"> & {
   /** Échéance, en ISO (« 2026-06-20 ») ou objet Date. */
   date: string | Date
 }
 
-/** Formate une échéance en « JEU. 20 JUIN » (jour abrégé + jour + mois). */
-const dueFormatter = new Intl.DateTimeFormat("fr-FR", {
-  weekday: "short",
-  day: "numeric",
-  month: "long",
-})
-
-function formatDue(date: string | Date): string {
-  const value = typeof date === "string" ? new Date(date) : date
-  // « jeu. 20 juin » → on retire le point d'abréviation parasite puis MAJ.
-  return dueFormatter.format(value).toUpperCase()
+/** Classes de fond/texte selon l'étiquette d'urgence. */
+function badgeTone(label: string): string {
+  if (label === "EN RETARD") return "bg-brique text-paper-light"
+  if (label === "AUJOURD'HUI" || label === "DEMAIN") return "bg-sauge text-ink"
+  return "bg-paper-light text-ink-soft"
 }
 
 function DueBadge({ date, className, ...props }: DueBadgeProps) {
+  const label = getDueLabel(date)
+
   return (
     <span
       data-slot="due-badge"
       className={cn(
-        "inline-block shrink-0 whitespace-nowrap rounded-[4px] border-[1.5px] border-ink bg-paper-light px-1.5 py-[3px] font-display text-[10px] uppercase leading-none text-ink-soft",
+        "inline-block shrink-0 whitespace-nowrap rounded-[4px] border-[1.5px] border-ink px-1.5 py-[3px] font-display text-[10px] uppercase leading-none",
+        badgeTone(label),
         className,
       )}
       {...props}
     >
-      {formatDue(date)}
+      {label}
     </span>
   )
 }
