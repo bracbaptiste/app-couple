@@ -1,20 +1,20 @@
 "use client"
 
 import Link from "next/link"
-import { Pencil, Plus, Trash2, X } from "lucide-react"
-import { useEffect, useRef, useState, useTransition, useActionState } from "react"
-import { useFormStatus } from "react-dom"
+import { Pencil, Plus, Trash2 } from "lucide-react"
+import { useState, useTransition } from "react"
 
 import { RisoButton } from "@/components/ui/riso-button"
 import { RisoCard } from "@/components/ui/riso-card"
 import { RisoInput } from "@/components/ui/riso-input"
-import { Field, FormFeedback } from "@/app/(auth)/form-ui"
+import { SectionMarker } from "@/components/lists/SectionMarker"
+import { SharedBadge } from "@/components/shared/SharedBadge"
+import { NewListSheet } from "@/components/lists/NewListSheet"
 import { useRealtimeLists } from "@/lib/realtime"
 import { useOfflineCache } from "@/lib/offline/use-offline-cache"
 
 import {
   clearCheckedItems,
-  createList,
   deleteList,
   renameList,
   type ActionResult,
@@ -23,6 +23,10 @@ import {
 export type ListView = {
   id: string
   name: string
+  /** Type de liste : courses (V1) ou to-do (V2). */
+  kind: "courses" | "todo"
+  /** Liste partagée avec la conjointe (affiche le badge « Partagé »). */
+  isShared: boolean
   /** Nombre total d'articles. */
   total: number
   /** Nombre d'articles non cochés (restant à acheter). */
@@ -51,9 +55,12 @@ function formatUpdatedAt(iso: string | null): string | null {
 export function ListsManager({
   lists,
   coupleId,
+  partnerName,
 }: {
   lists: ListView[]
   coupleId: string
+  /** Prénom de la conjointe pour la case « Partager » du sheet (null si seul). */
+  partnerName: string | null
 }) {
   // Temps réel : un changement de liste ou d'article côté partenaire rafraîchit
   // la grille (décomptes + dernière activité) sans refresh manuel.
@@ -62,9 +69,13 @@ export function ListsManager({
   // Cache de lecture (fondation hors ligne) : on garde la dernière grille connue.
   useOfflineCache("lists", lists)
 
-  // Le formulaire de création est replié par défaut : un bouton « + » le déploie
-  // pour garder le hub épuré quand on consulte simplement ses listes.
+  // Le bouton « + » ouvre le sheet de création (PRD_V2 §2.3).
   const [creating, setCreating] = useState(false)
+
+  // Regroupement par type pour le hub V2 (l'ordre interne — par position — est
+  // préservé puisque `lists` arrive déjà trié).
+  const todoLists = lists.filter((l) => l.kind === "todo")
+  const coursesLists = lists.filter((l) => l.kind === "courses")
 
   return (
     <div className="flex flex-col gap-5">
@@ -73,21 +84,21 @@ export function ListsManager({
           <h1 className="font-display text-xl uppercase text-ink">Listes</h1>
           <button
             type="button"
-            aria-expanded={creating}
-            aria-label={creating ? "Fermer le formulaire" : "Nouvelle liste"}
-            onClick={() => setCreating((c) => !c)}
+            aria-haspopup="dialog"
+            aria-label="Nouvelle liste"
+            onClick={() => setCreating(true)}
             className="ml-auto inline-flex size-11 shrink-0 items-center justify-center rounded-[8px] border-2 border-ink bg-brique text-paper-light shadow-riso-ink-sm outline-none transition-[transform,box-shadow] focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px active:shadow-none"
           >
-            {creating ? (
-              <X className="size-5" strokeWidth={2.5} aria-hidden />
-            ) : (
-              <Plus className="size-5" strokeWidth={2.5} aria-hidden />
-            )}
+            <Plus className="size-5" strokeWidth={2.5} aria-hidden />
           </button>
         </div>
-
-        {creating && <CreateListForm onCreated={() => setCreating(false)} />}
       </div>
+
+      <NewListSheet
+        open={creating}
+        onOpenChange={setCreating}
+        partnerName={partnerName}
+      />
 
       {lists.length === 0 ? (
         <RisoCard shadow="sauge">
@@ -97,79 +108,42 @@ export function ListsManager({
           </p>
         </RisoCard>
       ) : (
-        <ul className="flex flex-col gap-3.5">
-          {lists.map((list, index) => (
-            <ListTile
-              key={list.id}
-              list={list}
-              shadow={index % 2 === 0 ? "sauge" : "brique"}
-            />
-          ))}
-        </ul>
+        <>
+          {/* Regroupement par type (PRD_V2 §3.1) : to-do en premier, courses
+              ensuite. Le tampon de section n'apparaît que si son groupe existe. */}
+          {todoLists.length > 0 && (
+            <ListGroup kind="todo" lists={todoLists} />
+          )}
+          {coursesLists.length > 0 && (
+            <ListGroup kind="courses" lists={coursesLists} />
+          )}
+        </>
       )}
     </div>
   )
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Création                                                                   */
-/* -------------------------------------------------------------------------- */
-
-function CreateListForm({ onCreated }: { onCreated?: () => void }) {
-  const [state, formAction] = useActionState<ActionResult | null, FormData>(
-    createList,
-    null,
-  )
-  const formRef = useRef<HTMLFormElement>(null)
-
-  // Réinitialise le champ et replie le panneau après une création réussie.
-  useEffect(() => {
-    if (state?.ok) {
-      formRef.current?.reset()
-      onCreated?.()
-    }
-  }, [state, onCreated])
-
-  const error = state && !state.ok ? state.error : undefined
-
+/** Un groupe de listes d'un même type, précédé de son tampon de section. */
+function ListGroup({
+  kind,
+  lists,
+}: {
+  kind: "courses" | "todo"
+  lists: ListView[]
+}) {
   return (
-    <RisoCard shadow="ink" padding="lg">
-      <h2 className="mb-4 font-display text-lg uppercase text-ink">
-        Nouvelle liste
-      </h2>
-      <form ref={formRef} action={formAction} className="flex flex-col gap-3">
-        <Field label="Nom de la liste" htmlFor="new_list">
-          <div className="flex gap-2">
-            <RisoInput
-              id="new_list"
-              name="name"
-              type="text"
-              placeholder="Ex : Courses de la semaine"
-              maxLength={50}
-              autoFocus
-              required
-            />
-            <CreateSubmit />
-          </div>
-        </Field>
-        <FormFeedback error={error} />
-      </form>
-    </RisoCard>
-  )
-}
-
-/** Bouton « Créer » : désactivé + libellé d'attente pendant l'envoi. */
-function CreateSubmit() {
-  const { pending } = useFormStatus()
-  return (
-    <RisoButton
-      type="submit"
-      disabled={pending}
-      aria-busy={pending}
-      className="h-12 shrink-0 px-4 text-sm"
-    >
-      {pending ? "…" : "Créer"}
-    </RisoButton>
+    <div className="flex flex-col gap-2">
+      <SectionMarker kind={kind} />
+      <ul className="flex flex-col gap-3.5">
+        {lists.map((list, index) => (
+          <ListTile
+            key={list.id}
+            list={list}
+            shadow={index % 2 === 0 ? "sauge" : "brique"}
+          />
+        ))}
+      </ul>
+    </div>
   )
 }
 
@@ -207,7 +181,13 @@ function ListTile({
 
   return (
     <li>
-      <RisoCard shadow={shadow} padding="default">
+      <RisoCard shadow={shadow} padding="default" className="relative">
+        {/* Badge « Partagé » (DESIGN_SYSTEM_V2 §1.2 / §2.1) — coin haut droite. */}
+        {list.isShared && (
+          <div className="absolute right-[10px] top-[10px] z-10">
+            <SharedBadge />
+          </div>
+        )}
         {mode === "edit" ? (
           /* --- Mode renommage --- */
           <div className="flex flex-col gap-3">
@@ -254,7 +234,8 @@ function ListTile({
                   {list.unchecked}
                 </span>
                 <span className="font-mono text-[11px] text-ink-soft">
-                  à acheter · {list.total} au total
+                  {list.kind === "todo" ? "à faire" : "à acheter"} ·{" "}
+                  {list.total} au total
                 </span>
               </div>
               {updatedLabel && (

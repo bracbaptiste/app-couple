@@ -17,18 +17,31 @@ import { ListsManager, type ListView } from "./lists-client"
  * `./actions.ts`.
  */
 export default async function ListsPage() {
-  const { profile } = await requireAuth()
+  const { user, profile } = await requireAuth()
 
   // Le layout protège déjà l'accès, mais on garde le type sûr ici.
   if (!profile?.couple_id) redirect("/onboarding")
 
   const supabase = await createClient()
 
-  const { data: lists } = await supabase
-    .from("lists")
-    .select("id, name, created_at")
-    .eq("couple_id", profile.couple_id)
-    .order("position", { ascending: true })
+  const [listsRes, membersRes] = await Promise.all([
+    supabase
+      .from("lists")
+      .select("id, name, kind, is_shared, created_at")
+      .eq("couple_id", profile.couple_id)
+      .order("position", { ascending: true }),
+    // Membres du couple : on en tire le prénom de la conjointe pour la case
+    // « Partager avec … » du sheet de création.
+    supabase
+      .from("profiles")
+      .select("id, display_name")
+      .eq("couple_id", profile.couple_id),
+  ])
+
+  const lists = listsRes.data
+  const partner =
+    membersRes.data?.find((m) => m.id !== user.id) ?? null
+  const partnerName = partner?.display_name?.trim() || null
 
   const listIds = (lists ?? []).map((l) => l.id)
 
@@ -74,6 +87,10 @@ export default async function ListsPage() {
     return {
       id: l.id,
       name: l.name,
+      // 'todo' | 'courses' — défaut courses pour les listes V1 sans kind explicite.
+      kind: l.kind === "todo" ? "todo" : "courses",
+      // Partage : les listes V1 sont partagées par défaut après migration.
+      isShared: l.is_shared === true,
       total: agg?.total ?? 0,
       unchecked: agg?.unchecked ?? 0,
       updatedAt: Number.isFinite(lastMs) ? new Date(lastMs).toISOString() : null,
@@ -82,7 +99,11 @@ export default async function ListsPage() {
 
   return (
     <section className="mx-auto w-full max-w-sm">
-      <ListsManager lists={views} coupleId={profile.couple_id} />
+      <ListsManager
+        lists={views}
+        coupleId={profile.couple_id}
+        partnerName={partnerName}
+      />
     </section>
   )
 }
