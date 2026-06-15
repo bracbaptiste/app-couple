@@ -11,6 +11,7 @@ import {
   type ItemView,
   type MemberView,
 } from "./list-detail-client"
+import { TodoListView } from "@/components/todo/TodoListView"
 
 type Color = "sauge" | "brique"
 
@@ -47,12 +48,22 @@ export default async function ListDetailPage({
 
   const { data: list } = await supabase
     .from("lists")
-    .select("id, name")
+    .select("id, name, kind")
     .eq("id", listId)
     .eq("couple_id", profile.couple_id)
     .maybeSingle()
 
   if (!list) notFound()
+
+  // Routage par type (ARCHITECTURE_V2 §4, option A) : une to-do list rend son
+  // propre écran ; on ne déclenche pas le fetch d'articles/rayons des courses.
+  if (list.kind === "todo") {
+    return (
+      <section className="mx-auto w-full max-w-sm">
+        <TodoListView name={list.name} />
+      </section>
+    )
+  }
 
   // Articles + produit lié, rayons, membres : en parallèle (pas de N+1).
   const [itemsRes, categoriesRes, membersRes] = await Promise.all([
