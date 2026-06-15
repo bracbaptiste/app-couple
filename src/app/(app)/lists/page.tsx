@@ -43,40 +43,64 @@ export default async function ListsPage() {
     membersRes.data?.find((m) => m.id !== user.id) ?? null
   const partnerName = partner?.display_name?.trim() || null
 
-  const listIds = (lists ?? []).map((l) => l.id)
+  // On sépare les ids par type : les listes de courses comptent leurs
+  // `list_items`, les listes to-do comptent leurs `tasks` (modèle V2,
+  // ARCHITECTURE_V2 §2). Le hub agrégeait jusqu'ici uniquement les articles,
+  // d'où les listes to-do affichées « 0 » alors qu'elles ont des tâches.
+  const coursesIds = (lists ?? [])
+    .filter((l) => l.kind !== "todo")
+    .map((l) => l.id)
+  const todoIds = (lists ?? [])
+    .filter((l) => l.kind === "todo")
+    .map((l) => l.id)
 
-  // Articles de toutes les listes en une requête (évite le N+1). list_items
-  // n'a pas de couple_id : on filtre par list_id (eux-mêmes déjà sous RLS).
-  const { data: items } = listIds.length
-    ? await supabase
-        .from("list_items")
-        .select("list_id, is_checked, created_at, checked_at")
-        .in("list_id", listIds)
-    : { data: [] }
+  // Articles (courses) + tâches (to-do) en parallèle, chacune en une requête
+  // (évite le N+1). Ni `list_items` ni `tasks` n'ont de couple_id : on filtre
+  // par list_id (eux-mêmes déjà sous RLS).
+  const [itemsRes, tasksRes] = await Promise.all([
+    coursesIds.length
+      ? supabase
+          .from("list_items")
+          .select("list_id, is_checked, created_at, checked_at")
+          .in("list_id", coursesIds)
+      : Promise.resolve({ data: [] as const }),
+    todoIds.length
+      ? supabase
+          .from("tasks")
+          .select("list_id, is_done, created_at, done_at")
+          .in("list_id", todoIds)
+      : Promise.resolve({ data: [] as const }),
+  ])
 
-  // Agrégation par liste : total, non cochés, dernière activité.
+  const items = itemsRes.data
+  const tasks = tasksRes.data
+
+  // Agrégation par liste : total, restant à faire/acheter, dernière activité.
   type Agg = { total: number; unchecked: number; lastActivity: number }
   const byList = new Map<string, Agg>()
 
-  for (const item of items ?? []) {
-    const agg = byList.get(item.list_id) ?? {
+  function bump(listId: string, open: boolean, ...stamps: (string | null)[]) {
+    const agg = byList.get(listId) ?? {
       total: 0,
       unchecked: 0,
       lastActivity: 0,
     }
     agg.total += 1
-    if (!item.is_checked) agg.unchecked += 1
-
-    const created = Date.parse(item.created_at)
-    if (Number.isFinite(created)) agg.lastActivity = Math.max(agg.lastActivity, created)
-    if (item.checked_at) {
-      const checked = Date.parse(item.checked_at)
-      if (Number.isFinite(checked)) {
-        agg.lastActivity = Math.max(agg.lastActivity, checked)
-      }
+    if (open) agg.unchecked += 1
+    for (const stamp of stamps) {
+      if (!stamp) continue
+      const ms = Date.parse(stamp)
+      if (Number.isFinite(ms)) agg.lastActivity = Math.max(agg.lastActivity, ms)
     }
+    byList.set(listId, agg)
+  }
 
-    byList.set(item.list_id, agg)
+  for (const item of items ?? []) {
+    bump(item.list_id, !item.is_checked, item.created_at, item.checked_at)
+  }
+
+  for (const task of tasks ?? []) {
+    bump(task.list_id, !task.is_done, task.created_at, task.done_at)
   }
 
   const views: ListView[] = (lists ?? []).map((l) => {
