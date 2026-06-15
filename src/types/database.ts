@@ -1,13 +1,3 @@
-/**
- * Types de la base de données Supabase — App Couple (V1).
- *
- * ⚠️ Fichier GÉNÉRÉ — ne pas éditer à la main.
- * Régénérer après toute migration :
- *
- *   npx supabase gen types typescript --project-id qcpbbnsjawkrtmymfnux > src/types/database.ts
- *
- * (ou via le connecteur Supabase / le dashboard). Source : projet `app-couple`.
- */
 export type Json =
   | string
   | number
@@ -207,7 +197,10 @@ export type Database = {
           created_at: string
           created_by: string | null
           id: string
+          is_shared: boolean
+          kind: string
           name: string
+          owner_id: string | null
           position: number
         }
         Insert: {
@@ -215,7 +208,10 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           id?: string
+          is_shared?: boolean
+          kind?: string
           name: string
+          owner_id?: string | null
           position?: number
         }
         Update: {
@@ -223,7 +219,10 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           id?: string
+          is_shared?: boolean
+          kind?: string
           name?: string
+          owner_id?: string | null
           position?: number
         }
         Relationships: [
@@ -237,6 +236,13 @@ export type Database = {
           {
             foreignKeyName: "lists_created_by_fkey"
             columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lists_owner_id_fkey"
+            columns: ["owner_id"]
             isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
@@ -271,6 +277,67 @@ export type Database = {
             columns: ["couple_id"]
             isOneToOne: false
             referencedRelation: "couples"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tasks: {
+        Row: {
+          added_by: string | null
+          created_at: string | null
+          done_at: string | null
+          done_by: string | null
+          due_date: string | null
+          id: string
+          is_done: boolean
+          list_id: string
+          position: number
+          title: string
+        }
+        Insert: {
+          added_by?: string | null
+          created_at?: string | null
+          done_at?: string | null
+          done_by?: string | null
+          due_date?: string | null
+          id?: string
+          is_done?: boolean
+          list_id: string
+          position?: number
+          title: string
+        }
+        Update: {
+          added_by?: string | null
+          created_at?: string | null
+          done_at?: string | null
+          done_by?: string | null
+          due_date?: string | null
+          id?: string
+          is_done?: boolean
+          list_id?: string
+          position?: number
+          title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tasks_added_by_fkey"
+            columns: ["added_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tasks_done_by_fkey"
+            columns: ["done_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tasks_list_id_fkey"
+            columns: ["list_id"]
+            isOneToOne: false
+            referencedRelation: "lists"
             referencedColumns: ["id"]
           },
         ]
