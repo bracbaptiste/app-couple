@@ -2,13 +2,22 @@
 
 import Link from "next/link"
 import { ArrowLeft, Pencil } from "lucide-react"
-import { useMemo, useState, useTransition } from "react"
+import {
+  useEffect,
+  useMemo,
+  useOptimistic,
+  useRef,
+  useState,
+  useTransition,
+} from "react"
 
 import { AddTaskBar } from "./AddTaskBar"
 import { DonePanel } from "./DonePanel"
 import { TaskItem } from "./TaskItem"
-import { addTask, toggleTask } from "@/app/(app)/lists/[listId]/task-actions"
 import { useRealtimeTasks } from "@/lib/realtime"
+import { runMutation } from "@/lib/offline/mutation-queue"
+import { useOfflineCache } from "@/lib/offline/use-offline-cache"
+import { useOnlineStatus } from "@/lib/offline/use-online-status"
 import { sortPendingTasks } from "@/lib/utils/sortTasks"
 
 type Color = "sauge" | "brique"
@@ -35,6 +44,8 @@ type TodoListViewProps = {
   listId: string
   name: string
   members: TodoMemberView[]
+  /** Id du profil courant — pour le marqueur d'une tâche ajoutée optimistement. */
+  currentMemberId: string
   /** Tâches non faites de la liste (is_done = false), déjà filtrées côté serveur. */
   tasks: TaskView[]
   /**
@@ -45,24 +56,72 @@ type TodoListViewProps = {
 }
 
 /**
+ * Action interne du réducteur optimiste. Trois mutations déplacent / insèrent /
+ * retirent une tâche sans attendre le serveur :
+ *   - `toggle` : à faire ⇄ « Fait » (porté par la tâche) ;
+ *   - `add`    : nouvelle tâche insérée en tête des « à faire » ;
+ *   - `delete` : tâche retirée des deux sections.
+ */
+type OptimisticAction =
+  | { kind: "toggle"; id: string; done: boolean }
+  | { kind: "add"; task: TaskView }
+  | { kind: "delete"; id: string }
+
+/**
+ * Réducteur partagé : applique UNE action à la liste combinée (à faire + faites).
+ * Réutilisé à deux endroits avec une sémantique différente :
+ *   - dans `useOptimistic` (feedback EN LIGNE, annulé en fin de transition) ;
+ *   - sur l'overlay HORS LIGNE (changements PERSISTANTS tant qu'on n'a pas
+ *     resynchronisé), pour que l'UI ne « rebondisse » pas quand la transition se
+ *     termine sans rafraîchissement serveur.
+ */
+function applyTaskAction(
+  current: TaskView[],
+  action: OptimisticAction,
+): TaskView[] {
+  switch (action.kind) {
+    case "toggle":
+      return current.map((t) =>
+        t.id === action.id ? { ...t, isDone: action.done } : t,
+      )
+    case "add":
+      return [action.task, ...current]
+    case "delete":
+      return current.filter((t) => t.id !== action.id)
+  }
+}
+
+/**
  * Écran d'une to-do list (kind = 'todo').
  *
  * AddTaskBar + liste des tâches à faire, triées par urgence (ARCHITECTURE_V2
  * §4.3) : en retard → aujourd'hui/demain → futur → sans échéance. En bas, la
  * section « Fait » repliable (DonePanel §2.8).
+ *
+ * RÉSILIENCE HORS LIGNE (même stratégie que l'écran courses) : cochage, ajout et
+ * suppression passent par `runMutation` (exécution en ligne, mise en file hors
+ * ligne) ; l'UI répond immédiatement via `useOptimistic` + un overlay offline
+ * persistant ; le cache de lecture garde la dernière copie connue.
  */
 export function TodoListView({
   listId,
   name,
   members,
+  currentMemberId,
   tasks,
   doneTasks,
 }: TodoListViewProps) {
   // Temps réel : ajout / cochage / modif / suppression d'une tâche côté
   // partenaire (sur CETTE liste) rafraîchit l'écran sans refresh manuel.
   // `refresh()` ne met à jour que la donnée serveur de base ; l'optimiste local
-  // (useTransition) reste prioritaire pendant les mutations en cours.
+  // reste prioritaire pendant les mutations en cours.
   useRealtimeTasks(listId)
+
+  // Cache de lecture : dernière copie connue de l'écran (à chaque chargement en
+  // ligne). Fondation pour la consultation hors ligne (cf. use-offline-cache.ts).
+  useOfflineCache(`tasks:${listId}`, { tasks, doneTasks, members })
+
+  const online = useOnlineStatus()
 
   // Index prénom/couleur par id de profil, pour le marqueur « ajouté par ».
   const membersById = useMemo(() => {
@@ -71,19 +130,67 @@ export function TodoListView({
     return map
   }, [members])
 
-  // Tri par urgence (retard d'abord, sans échéance en bas).
-  const sortedTasks = useMemo(() => sortPendingTasks(tasks), [tasks])
+  // Base optimiste : à faire + faites réunies (le réducteur déplace une tâche
+  // d'une section à l'autre par simple bascule de `isDone`).
+  const combined = useMemo(() => [...tasks, ...doneTasks], [tasks, doneTasks])
 
-  const [isPending, startTransition] = useTransition()
+  // État optimiste : réapplique la valeur optimiste tant que la transition est
+  // en cours, puis revient à `combined` (donnée serveur) :
+  //   - succès en ligne → `revalidatePath` a déjà mis les props à jour ;
+  //   - échec           → `combined` inchangé : rollback visuel automatique.
+  const [optimisticTasks, applyOptimistic] = useOptimistic(
+    combined,
+    applyTaskAction,
+  )
+  const [isPending, startAction] = useTransition()
   const [error, setError] = useState<string | undefined>()
+
+  // Overlay HORS LIGNE : `useOptimistic` annule sa valeur dès la fin de la
+  // transition, or hors ligne le serveur ne revalide rien → sans overlay, la
+  // case cochée (ou la tâche ajoutée / supprimée) « rebondirait ». On accumule
+  // donc les actions faites sans réseau ici (elles persistent). Au retour du
+  // réseau, le rejeu de la file + `router.refresh()` (OfflineIndicator) ramène
+  // la vérité serveur : on vide alors l'overlay.
+  const [offlinePatches, setOfflinePatches] = useState<OptimisticAction[]>([])
+  const wasOnline = useRef(true)
+  useEffect(() => {
+    if (online && !wasOnline.current) setOfflinePatches([])
+    wasOnline.current = online
+  }, [online])
+
+  // Affichage = état serveur + optimiste en vol + patches hors ligne persistants.
+  const displayTasks = useMemo(
+    () => offlinePatches.reduce(applyTaskAction, optimisticTasks),
+    [optimisticTasks, offlinePatches],
+  )
+
+  /** Mémorise une action si elle est faite hors ligne (sinon no-op). */
+  function rememberIfOffline(action: OptimisticAction) {
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      setOfflinePatches((prev) => [...prev, action])
+    }
+  }
 
   function handleAdd(title: string, dueDate?: Date) {
     setError(undefined)
-    startTransition(async () => {
-      const result = await addTask({
+    const iso = dueDate ? dueDate.toISOString().slice(0, 10) : null
+    // Tâche optimiste : id temporaire (remplacé par la vraie ligne au refresh).
+    const optimisticTask: TaskView = {
+      id: `tmp_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+      title,
+      dueDate: iso,
+      isDone: false,
+      addedBy: currentMemberId,
+      createdAt: new Date().toISOString(),
+    }
+    const action: OptimisticAction = { kind: "add", task: optimisticTask }
+    startAction(async () => {
+      applyOptimistic(action)
+      rememberIfOffline(action)
+      const result = await runMutation("addTask", {
         listId,
         rawTitle: title,
-        dueDate: dueDate ? dueDate.toISOString().slice(0, 10) : null,
+        dueDate: iso,
       })
       if (!result.ok) setError(result.error)
     })
@@ -91,11 +198,41 @@ export function TodoListView({
 
   function handleToggle(taskId: string, next: boolean) {
     setError(undefined)
-    startTransition(async () => {
-      const result = await toggleTask(listId, taskId, next)
+    const action: OptimisticAction = { kind: "toggle", id: taskId, done: next }
+    startAction(async () => {
+      applyOptimistic(action)
+      rememberIfOffline(action)
+      const result = await runMutation("toggleTask", {
+        listId,
+        taskId,
+        done: next,
+      })
       if (!result.ok) setError(result.error)
     })
   }
+
+  function handleDelete(taskId: string) {
+    setError(undefined)
+    const action: OptimisticAction = { kind: "delete", id: taskId }
+    startAction(async () => {
+      applyOptimistic(action)
+      rememberIfOffline(action)
+      const result = await runMutation("deleteTask", { listId, taskId })
+      if (!result.ok) setError(result.error)
+    })
+  }
+
+  // Reséparation à l'affichage : à faire (triées par urgence) et faites. Une
+  // tâche fraîchement cochée reste dans la région « à faire » de `combined`, donc
+  // remonte en tête de la section « Fait » (juste-faites d'abord).
+  const pending = useMemo(
+    () => sortPendingTasks(displayTasks.filter((t) => !t.isDone)),
+    [displayTasks],
+  )
+  const done = useMemo(
+    () => displayTasks.filter((t) => t.isDone),
+    [displayTasks],
+  )
 
   return (
     <div className="flex flex-col">
@@ -134,15 +271,15 @@ export function TodoListView({
           </p>
         )}
 
-        {tasks.length === 0 && doneTasks.length === 0 ? (
+        {pending.length === 0 && done.length === 0 ? (
           <p className="rounded-[10px] border-2 border-dashed border-ink bg-paper-light px-4 py-6 text-center text-sm text-ink-soft">
             Aucune tâche pour l’instant. Ajoute-en une ci-dessus.
           </p>
         ) : (
           <>
-            {tasks.length > 0 && (
+            {pending.length > 0 && (
               <ul className="flex flex-col gap-2">
-                {sortedTasks.map((task) => (
+                {pending.map((task) => (
                   <TaskItem
                     key={task.id}
                     id={task.id}
@@ -153,6 +290,7 @@ export function TodoListView({
                       task.addedBy ? membersById.get(task.addedBy) ?? null : null
                     }
                     onToggle={handleToggle}
+                    onDelete={handleDelete}
                   />
                 ))}
               </ul>
@@ -160,9 +298,10 @@ export function TodoListView({
 
             {/* Section « Fait » repliable (§2.8) */}
             <DonePanel
-              tasks={doneTasks}
+              tasks={done}
               membersById={membersById}
               onToggle={handleToggle}
+              onDelete={handleDelete}
             />
           </>
         )}

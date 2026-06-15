@@ -40,6 +40,7 @@ export type CacheKey =
   | "lists"
   | "library"
   | `list-items:${string}`
+  | `tasks:${string}`
 
 /** Une entrée de cache horodatée (pour afficher « vu il y a… » plus tard). */
 export type CacheEntry<T = unknown> = {

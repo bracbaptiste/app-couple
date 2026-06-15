@@ -115,6 +115,7 @@ export default async function ListDetailPage({
           listId={list.id}
           name={list.name}
           members={todoMembers}
+          currentMemberId={profile.id}
           tasks={tasks}
           doneTasks={doneTasks}
         />

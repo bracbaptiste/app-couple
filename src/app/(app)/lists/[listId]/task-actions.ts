@@ -135,3 +135,32 @@ export async function toggleTask(
   revalidatePath(`/lists/${listId}`)
   return { ok: true }
 }
+
+/* -------------------------------------------------------------------------- */
+/*  Suppression                                                               */
+/* -------------------------------------------------------------------------- */
+
+/** Supprime définitivement une tâche d'une to-do list. */
+export async function deleteTask(
+  listId: string,
+  taskId: string,
+): Promise<ActionResult> {
+  const { supabase, coupleId } = await requireMembership()
+
+  if (!(await assertTodoListOwned(supabase, listId, coupleId))) {
+    return { ok: false, error: "Liste introuvable." }
+  }
+
+  const { error } = await supabase
+    .from("tasks")
+    .delete()
+    .eq("id", taskId)
+    .eq("list_id", listId)
+
+  if (error) {
+    return { ok: false, error: "Suppression impossible. Réessaie." }
+  }
+
+  revalidatePath(`/lists/${listId}`)
+  return { ok: true }
+}
