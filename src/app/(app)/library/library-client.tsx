@@ -1,13 +1,8 @@
 "use client"
 
+import { Dialog } from "@base-ui/react/dialog"
 import { Search, Plus, Pencil, Trash2, Check, X } from "lucide-react"
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useTransition,
-} from "react"
+import { useMemo, useRef, useState, useTransition } from "react"
 
 import { CategoryHeader } from "@/components/ui/category-header"
 import { RisoButton } from "@/components/ui/riso-button"
@@ -73,6 +68,9 @@ const FREQUENCY_LABEL: Record<Frequency, string> = {
   2: "Occasionnel",
   1: "Rare",
 }
+
+/** Largeur révélée par le swipe : deux cibles tactiles de 64px (≥ 44px requis). */
+const SWIPE_REVEAL = 128
 
 /** Normalise un libellé pour la recherche (insensible casse + accents). */
 function normalize(value: string): string {
@@ -220,18 +218,17 @@ export function LibraryBrowser({
         />
       )}
 
-      {sheetOpen && (
-        <SendSheet
-          itemIds={selectedIds}
-          count={selectedCount}
-          lists={lists}
-          onClose={() => setSheetOpen(false)}
-          onDone={() => {
-            setSheetOpen(false)
-            setSelected(new Set())
-          }}
-        />
-      )}
+      <SendSheet
+        open={sheetOpen}
+        onOpenChange={setSheetOpen}
+        itemIds={selectedIds}
+        count={selectedCount}
+        lists={lists}
+        onDone={() => {
+          setSheetOpen(false)
+          setSelected(new Set())
+        }}
+      />
     </div>
   )
 }
@@ -300,7 +297,7 @@ function SmartItemField({
           placeholder="Rechercher ou ajouter un article…"
           maxLength={60}
           aria-label="Rechercher ou ajouter un article"
-          className="h-12 w-full bg-transparent text-base font-medium text-ink outline-none placeholder:font-body placeholder:text-ink/55"
+          className="h-12 w-full bg-transparent text-base font-medium text-ink outline-none placeholder:font-body placeholder:text-ink-soft"
         />
       </div>
 
@@ -405,13 +402,138 @@ function LibraryRow({
 
   const editing = mode === "edit"
 
+  // --- Swipe pour révéler les actions (crayon + corbeille) ----------------
+  // Même geste que les tuiles de liste et les tâches (Pointer Events, sans
+  // librairie). La ligne glisse vers la gauche de `offset` (≤ 0) pour découvrir
+  // le calque d'actions ; le calque reste accessible au clavier (boutons
+  // focusables ; recevoir le focus ouvre la ligne, le perdre la referme).
+  const [offset, setOffset] = useState(0)
+  const [dragging, setDragging] = useState(false)
+  const pointerActive = useRef(false)
+  const dragStartX = useRef(0)
+  const dragStartOffset = useRef(0)
+  // Vrai dès que le pointeur a réellement glissé (≥ seuil) : sert à avaler le
+  // `click` que le navigateur émet à la fin d'un drag (sinon il (dé)sélectionnerait
+  // l'article ou ouvrirait l'édition).
+  const didDrag = useRef(false)
+
+  function closeSwipe() {
+    setOffset(0)
+  }
+
+  function onSwipePointerDown(e: React.PointerEvent) {
+    // Pas de swipe quand un panneau (édition / suppression) est ouvert.
+    if (mode !== null) return
+    pointerActive.current = true
+    dragStartX.current = e.clientX
+    dragStartOffset.current = offset
+    didDrag.current = false
+  }
+
+  function onSwipePointerMove(e: React.PointerEvent) {
+    if (!pointerActive.current) return
+    const dx = e.clientX - dragStartX.current
+    if (!didDrag.current) {
+      if (Math.abs(dx) <= 5) return // sous le seuil : peut-être un simple tap
+      didDrag.current = true
+      setDragging(true)
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId)
+      } catch {
+        // Capture refusée (rare) : le drag marche tant que le pointeur reste là.
+      }
+    }
+    setOffset(Math.max(-SWIPE_REVEAL, Math.min(0, dragStartOffset.current + dx)))
+  }
+
+  function onSwipePointerEnd() {
+    if (!pointerActive.current) return
+    pointerActive.current = false
+    if (!didDrag.current) return // simple tap : rien à snapper
+    setDragging(false)
+    setOffset((o) => (o < -SWIPE_REVEAL / 2 ? -SWIPE_REVEAL : 0))
+  }
+
   return (
     <li
       className={cn(
-        "rounded-[10px] border-2 border-ink p-2.5 transition-colors",
-        selected ? "bg-sauge/40" : "bg-paper-light",
+        "relative overflow-hidden rounded-[10px]",
+        selected && "bg-sauge/40",
       )}
     >
+      {/* Calque d'actions (Modifier + Supprimer), révélé par le glissement et
+          accessible au clavier : recevoir le focus ouvre la ligne. */}
+      {mode === null && (
+        <div
+          className="absolute inset-y-0 right-0 z-0 flex"
+          onFocus={() => setOffset(-SWIPE_REVEAL)}
+          onBlur={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node)) closeSwipe()
+          }}
+        >
+          <button
+            type="button"
+            aria-label={`Modifier ${item.name}`}
+            disabled={isPending}
+            onClick={() => {
+              closeSwipe()
+              openEdit()
+            }}
+            className="inline-flex w-16 items-center justify-center bg-sauge text-ink outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ink disabled:opacity-50"
+          >
+            <Pencil className="size-5" strokeWidth={2.5} aria-hidden />
+          </button>
+          <button
+            type="button"
+            aria-label={`Supprimer ${item.name}`}
+            disabled={isPending}
+            onClick={() => {
+              closeSwipe()
+              setError(undefined)
+              setMode("delete")
+            }}
+            className="inline-flex w-16 items-center justify-center border-l-2 border-ink bg-brique text-paper-light outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-paper-light disabled:opacity-50"
+          >
+            <Trash2 className="size-5" strokeWidth={2.5} aria-hidden />
+          </button>
+        </div>
+      )}
+
+      {/* Carte au premier plan : glisse via translateX. `touch-pan-y` laisse le
+          scroll vertical au navigateur et nous réserve l'horizontale. */}
+      <div
+        className={cn(
+          "relative z-10 select-none touch-pan-y rounded-[10px] border-2 border-ink p-2.5",
+          selected ? "bg-sauge/40" : "bg-paper-light",
+          mode === null
+            ? dragging
+              ? ""
+              : "transition-transform duration-200 ease-out motion-reduce:transition-none"
+            : "",
+        )}
+        style={
+          mode === null ? { transform: `translateX(${offset}px)` } : undefined
+        }
+        onPointerDown={onSwipePointerDown}
+        onPointerMove={onSwipePointerMove}
+        onPointerUp={onSwipePointerEnd}
+        onPointerCancel={onSwipePointerEnd}
+        onClickCapture={(e) => {
+          // Click de fin de glissement : on l'avale (pas de (dé)sélection parasite).
+          if (didDrag.current) {
+            e.preventDefault()
+            e.stopPropagation()
+            didDrag.current = false
+            return
+          }
+          // Tap sur une ligne déjà ouverte : on referme au lieu d'agir.
+          if (offset !== 0) {
+            e.preventDefault()
+            e.stopPropagation()
+            closeSwipe()
+          }
+        }}
+      >
       <div className="flex items-center gap-1.5">
         {/* Case de sélection pour l'export groupé */}
         <RisoCheckbox
@@ -434,7 +556,7 @@ function LibraryRow({
           aria-label={`Modifier ${item.name}`}
           className="min-w-0 flex-1 rounded-[6px] text-left outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper disabled:opacity-50"
         >
-          <p className="truncate text-[15px] font-medium leading-tight text-ink">
+          <p className="line-clamp-2 text-[15px] font-medium leading-tight text-ink">
             {item.name}
           </p>
           <p className="font-mono text-[11px] text-ink-soft">
@@ -443,33 +565,24 @@ function LibraryRow({
           </p>
         </button>
 
-        {/* Modifier (crayon) : ouvre / ferme le même panneau que le tap sur le nom. */}
-        <button
-          type="button"
-          aria-label={`Modifier ${item.name}`}
-          aria-expanded={editing}
-          disabled={isPending}
-          onClick={() => (editing ? setMode(null) : openEdit())}
-          className="inline-flex size-11 shrink-0 items-center justify-center rounded-[8px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px disabled:opacity-50"
-        >
-          <Pencil className="size-5" strokeWidth={2.5} aria-hidden />
-        </button>
-
-        {/* Supprimer */}
-        <button
-          type="button"
-          aria-label={`Supprimer ${item.name}`}
-          aria-expanded={mode === "delete"}
-          disabled={isPending}
-          onClick={() => {
-            setMode((m) => (m === "delete" ? null : "delete"))
-            setError(undefined)
-          }}
-          className="inline-flex size-11 shrink-0 items-center justify-center rounded-[8px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-brique focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px disabled:opacity-50"
-        >
-          <Trash2 className="size-5" strokeWidth={2.5} aria-hidden />
-        </button>
       </div>
+
+      {/* Repère de découvrabilité du swipe : languette encre sur le bord droit
+          (même rendu que les tuiles de liste). Cliquable → ouvre le calque.
+          aria-hidden + hors tabulation : le clavier passe par les boutons du
+          calque, focusables. */}
+      {mode === null && offset === 0 && (
+        <button
+          type="button"
+          aria-hidden
+          tabIndex={-1}
+          onClick={() => setOffset(-SWIPE_REVEAL)}
+          title="Afficher les actions (ou glisser la ligne vers la gauche)"
+          className="absolute -right-0.5 top-1/2 z-10 inline-flex h-11 w-6 -translate-y-1/2 items-center justify-end outline-none"
+        >
+          <span aria-hidden className="block h-9 w-1.5 rounded-full bg-ink" />
+        </button>
+      )}
 
       {/* Panneau d'édition combiné : nom + rayon */}
       {editing && (
@@ -579,6 +692,7 @@ function LibraryRow({
           {error}
         </p>
       )}
+      </div>
     </li>
   )
 }
@@ -640,37 +754,31 @@ function SelectionBar({
  * Bottom-sheet mobile listant les listes du couple. Sélectionner une liste y
  * envoie TOUS les produits cochés (un seul geste), renforce leur fréquence, puis
  * referme la feuille et vide la sélection. Échec → message d'erreur in-situ.
+ *
+ * Construit sur le `Dialog` de base-ui (comme {@link NewListSheet}) : piège de
+ * focus, restauration du focus au déclencheur, fermeture Échap / clic dehors et
+ * verrouillage du scroll sont fournis par la primitive — plus de gestion manuelle.
+ * Composant contrôlé (`open` / `onOpenChange`), monté en permanence : le Portal
+ * ne rend rien tant que la feuille est fermée.
  */
 function SendSheet({
+  open,
+  onOpenChange,
   itemIds,
   count,
   lists,
-  onClose,
   onDone,
 }: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
   itemIds: string[]
   count: number
   lists: ListChoice[]
-  onClose: () => void
   onDone: () => void
 }) {
   const [isPending, startTransition] = useTransition()
   const [error, setError] = useState<string | undefined>()
   const [doneListId, setDoneListId] = useState<string | null>(null)
-
-  // Ferme à la touche Échap et verrouille le défilement de l'arrière-plan.
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose()
-    }
-    document.addEventListener("keydown", onKey)
-    const prevOverflow = document.body.style.overflow
-    document.body.style.overflow = "hidden"
-    return () => {
-      document.removeEventListener("keydown", onKey)
-      document.body.style.overflow = prevOverflow
-    }
-  }, [onClose])
 
   function pick(listId: string) {
     setError(undefined)
@@ -687,72 +795,80 @@ function SendSheet({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end justify-center"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Envoyer la sélection vers une liste"
-    >
-      {/* Voile : ferme au tap. */}
-      <button
-        type="button"
-        aria-label="Fermer"
-        onClick={onClose}
-        className="absolute inset-0 bg-ink/40"
-      />
-
-      {/* Panneau ancré en bas, largeur mobile. */}
-      <div className="relative flex max-h-[75vh] w-full max-w-sm flex-col rounded-t-[14px] border-2 border-ink bg-paper-light shadow-riso-ink">
-        <div className="flex items-start justify-between gap-3 border-b-2 border-dashed border-ink px-4 py-3">
-          <div className="min-w-0">
-            <h3 className="font-display text-[15px] uppercase leading-none text-ink">
-              Envoyer vers quelle liste ?
-            </h3>
-            <p className="mt-1 truncate font-mono text-[11px] text-ink-soft">
-              {count} article{count > 1 ? "s" : ""} sélectionné{count > 1 ? "s" : ""}
-            </p>
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Backdrop className="fixed inset-0 z-40 bg-ink/40 transition-opacity data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 motion-reduce:transition-none" />
+        <Dialog.Popup
+          // `initialFocus={false}` : on laisse l'`autoFocus` natif (sur la première
+          // liste, ou « Fermer » si vide) placer le focus dès le montage, sans
+          // dépendre de la fin de la transition d'entrée (cf. NewListSheet).
+          initialFocus={false}
+          className={cn(
+            "fixed inset-x-0 bottom-0 z-50 mx-auto flex max-h-[75vh] w-full max-w-sm flex-col",
+            "rounded-t-[14px] border-2 border-ink bg-paper-light shadow-riso-ink",
+            "transition-transform data-[ending-style]:translate-y-full data-[starting-style]:translate-y-full motion-reduce:transition-none",
+          )}
+        >
+          <div className="flex items-start justify-between gap-3 border-b-2 border-dashed border-ink px-4 py-3">
+            <div className="min-w-0">
+              <Dialog.Title className="font-display text-[15px] uppercase leading-none text-ink">
+                Envoyer vers quelle liste ?
+              </Dialog.Title>
+              <Dialog.Description className="mt-1 truncate font-mono text-[11px] text-ink-soft">
+                {count} article{count > 1 ? "s" : ""} sélectionné{count > 1 ? "s" : ""}
+              </Dialog.Description>
+            </div>
+            <RisoButton
+              variant="ghost"
+              size="sm"
+              onClick={() => onOpenChange(false)}
+              // Cible de focus de repli quand il n'y a aucune liste à proposer.
+              autoFocus={lists.length === 0}
+            >
+              Fermer
+            </RisoButton>
           </div>
-          <RisoButton variant="ghost" size="sm" onClick={onClose}>
-            Fermer
-          </RisoButton>
-        </div>
 
-        {lists.length === 0 ? (
-          <p className="px-4 py-6 text-center text-sm text-ink-soft">
-            Aucune liste pour l’instant. Crée d’abord une liste de courses.
-          </p>
-        ) : (
-          <ul className="flex flex-col gap-1.5 overflow-y-auto p-3">
-            {lists.map((list) => (
-              <li key={list.id}>
-                <button
-                  type="button"
-                  onClick={() => pick(list.id)}
-                  disabled={isPending}
-                  className={cn(
-                    "flex h-12 w-full items-center justify-between gap-2 rounded-[8px] border-2 border-ink px-3 text-left text-[15px] font-medium text-ink outline-none transition-[transform,box-shadow] focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px active:shadow-none disabled:opacity-60",
-                    doneListId === list.id ? "bg-sauge shadow-riso-ink-sm" : "bg-paper-light",
-                  )}
-                >
-                  <span className="truncate">{list.name}</span>
-                  {doneListId === list.id && (
-                    <Check className="size-5 shrink-0" strokeWidth={2.5} aria-hidden />
-                  )}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
+          {lists.length === 0 ? (
+            <p className="px-4 py-6 text-center text-sm text-ink-soft">
+              Aucune liste pour l’instant. Crée d’abord une liste de courses.
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-1.5 overflow-y-auto p-3">
+              {lists.map((list, index) => (
+                <li key={list.id}>
+                  <button
+                    type="button"
+                    onClick={() => pick(list.id)}
+                    disabled={isPending}
+                    // La première liste reçoit le focus à l'ouverture (contenu
+                    // principal de la feuille), via l'`autoFocus` natif.
+                    autoFocus={index === 0}
+                    className={cn(
+                      "flex h-12 w-full items-center justify-between gap-2 rounded-[8px] border-2 border-ink px-3 text-left text-[15px] font-medium text-ink outline-none transition-[transform,box-shadow] focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px active:shadow-none disabled:opacity-60",
+                      doneListId === list.id ? "bg-sauge shadow-riso-ink-sm" : "bg-paper-light",
+                    )}
+                  >
+                    <span className="truncate">{list.name}</span>
+                    {doneListId === list.id && (
+                      <Check className="size-5 shrink-0" strokeWidth={2.5} aria-hidden />
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
 
-        {error && (
-          <p
-            role="alert"
-            className="mx-3 mb-3 rounded-[8px] border-2 border-brique bg-brique/10 px-2.5 py-1.5 text-[12px] font-medium leading-snug text-ink"
-          >
-            {error}
-          </p>
-        )}
-      </div>
-    </div>
+          {error && (
+            <p
+              role="alert"
+              className="mx-3 mb-3 rounded-[8px] border-2 border-brique bg-brique/10 px-2.5 py-1.5 text-[12px] font-medium leading-snug text-ink"
+            >
+              {error}
+            </p>
+          )}
+        </Dialog.Popup>
+      </Dialog.Portal>
+    </Dialog.Root>
   )
 }

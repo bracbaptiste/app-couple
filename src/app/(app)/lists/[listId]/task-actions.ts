@@ -103,6 +103,55 @@ export async function addTask(input: AddTaskInput): Promise<ActionResult> {
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Modification (intitulé · note · échéance)                                  */
+/* -------------------------------------------------------------------------- */
+
+const NOTE_MAX = 200
+
+/** Entrées de {@link editTask}. */
+export type EditTaskInput = {
+  listId: string
+  taskId: string
+  /** Nouvel intitulé (sera borné ; obligatoire). */
+  rawTitle: string
+  /** Note libre (bornée ; chaîne vide → effacée/NULL). */
+  note?: string | null
+  /** Échéance « yyyy-mm-dd » | null (null → échéance retirée). */
+  dueDate?: string | null
+}
+
+/** Modifie l'intitulé, la note et/ou l'échéance d'une tâche. */
+export async function editTask(input: EditTaskInput): Promise<ActionResult> {
+  const title = clamp(input.rawTitle, TITLE_MAX)
+  if (!title) return { ok: false, error: "Entre l’intitulé d’une tâche." }
+
+  const noteClean = clamp(input.note, NOTE_MAX)
+
+  const { supabase, coupleId } = await requireMembership()
+
+  if (!(await assertTodoListOwned(supabase, input.listId, coupleId))) {
+    return { ok: false, error: "Liste introuvable." }
+  }
+
+  const { error } = await supabase
+    .from("tasks")
+    .update({
+      title,
+      note: noteClean || null,
+      due_date: input.dueDate ?? null,
+    })
+    .eq("id", input.taskId)
+    .eq("list_id", input.listId)
+
+  if (error) {
+    return { ok: false, error: "Modification impossible. Réessaie." }
+  }
+
+  revalidatePath(`/lists/${input.listId}`)
+  return { ok: true }
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Cocher / décocher                                                          */
 /* -------------------------------------------------------------------------- */
 

@@ -128,42 +128,6 @@ export async function renameList(
 }
 
 /**
- * Vide la rubrique « Déjà pris » d'une liste : retire tous les articles cochés,
- * en gardant intacts ceux qui restent à acheter (non cochés). Geste de fin de
- * courses — on a tout pris, on nettoie la liste sans la supprimer.
- *
- * Les produits restent dans la bibliothèque (seuls les `list_items` cochés sont
- * supprimés). No-op silencieux s'il n'y a rien de coché.
- */
-export async function clearCheckedItems(listId: string): Promise<ActionResult> {
-  const { supabase, coupleId } = await requireMembership()
-
-  // Garde-fou : la liste doit appartenir au couple courant.
-  const { data: list } = await supabase
-    .from("lists")
-    .select("id")
-    .eq("id", listId)
-    .eq("couple_id", coupleId)
-    .maybeSingle()
-
-  if (!list) return { ok: false, error: "Liste introuvable." }
-
-  const { error } = await supabase
-    .from("list_items")
-    .delete()
-    .eq("list_id", listId)
-    .eq("is_checked", true)
-
-  if (error) {
-    return { ok: false, error: "Impossible de vider la liste. Réessaie." }
-  }
-
-  revalidatePath("/lists")
-  revalidatePath(`/lists/${listId}`)
-  return { ok: true }
-}
-
-/**
  * Supprime une liste et ses articles.
  * On retire d'abord les `list_items` (filtrés par list_id), puis la liste
  * elle-même (filtrée par couple_id, en plus de la RLS).

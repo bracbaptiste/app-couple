@@ -127,7 +127,7 @@ export async function addCategory(
     return { ok: false, error: "Impossible d'ajouter ce rayon. Réessaie." }
   }
 
-  revalidatePath("/profile")
+  revalidatePath("/profile/categories")
   return { ok: true }
 }
 
@@ -152,7 +152,7 @@ export async function renameCategory(
     return { ok: false, error: "Impossible de renommer. Réessaie." }
   }
 
-  revalidatePath("/profile")
+  revalidatePath("/profile/categories")
   return { ok: true }
 }
 
@@ -201,7 +201,7 @@ export async function moveCategory(
     return { ok: false, error: "Impossible de réordonner. Réessaie." }
   }
 
-  revalidatePath("/profile")
+  revalidatePath("/profile/categories")
   return { ok: true }
 }
 
@@ -277,7 +277,7 @@ export async function deleteCategory(
     return { ok: false, error: "Suppression impossible. Réessaie." }
   }
 
-  revalidatePath("/profile")
+  revalidatePath("/profile/categories")
   return { ok: true }
 }
 

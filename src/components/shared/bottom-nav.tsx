@@ -2,10 +2,9 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { ListChecks, User, type LucideIcon } from "lucide-react"
+import { ListChecks, ShoppingCart, User, type LucideIcon } from "lucide-react"
 
 import { cn } from "@/lib/utils"
-import { BiblioCartIcon } from "@/components/shared/biblio-cart-icon"
 
 /**
  * BottomNav — barre de navigation basse du Design System Sauge & Brique.
@@ -17,15 +16,15 @@ import { BiblioCartIcon } from "@/components/shared/biblio-cart-icon"
 export type BottomNavItem = {
   href: string
   label: string
-  icon: LucideIcon | typeof BiblioCartIcon
+  icon: LucideIcon
   /** Masque le texte sous l'icône (l'icône porte déjà l'identité de l'onglet). */
   hideLabel?: boolean
 }
 
 const DEFAULT_ITEMS: BottomNavItem[] = [
-  { href: "/lists", label: "Listes", icon: ListChecks },
-  { href: "/library", label: "Biblio", icon: BiblioCartIcon, hideLabel: true },
-  { href: "/profile", label: "Profil", icon: User },
+  { href: "/lists", label: "Listes", icon: ListChecks, hideLabel: true },
+  { href: "/library", label: "Biblio", icon: ShoppingCart, hideLabel: true },
+  { href: "/profile", label: "Profil", icon: User, hideLabel: true },
 ]
 
 type BottomNavProps = {
@@ -40,31 +39,39 @@ function BottomNav({ items = DEFAULT_ITEMS, className }: BottomNavProps) {
     <nav
       data-slot="bottom-nav"
       className={cn(
-        "sticky bottom-0 z-40 flex items-stretch gap-1.5 border-t-[2.5px] border-ink bg-paper-light px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]",
+        "sticky bottom-0 z-40 border-t-[2.5px] border-ink bg-paper-light px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]",
         className
       )}
     >
-      {items.map(({ href, label, icon: Icon, hideLabel }) => {
-        const active = pathname === href || pathname.startsWith(`${href}/`)
+      {/* Le trait encré court d'un bord à l'autre, mais les onglets restent
+          calés sur la même colonne max-w-sm que le contenu (alignés sur tablette). */}
+      <div className="mx-auto flex w-full max-w-sm items-stretch gap-1.5">
+        {items.map(({ href, label, icon: Icon, hideLabel }) => {
+          const active = pathname === href || pathname.startsWith(`${href}/`)
 
-        return (
-          <Link
-            key={href}
-            href={href}
-            aria-current={active ? "page" : undefined}
-            aria-label={hideLabel ? label : undefined}
-            className={cn(
-              "flex min-h-11 flex-1 flex-col items-center justify-center gap-1 rounded-[8px] border-2 py-1.5 font-display text-[9px] uppercase leading-none transition-colors",
-              active
-                ? "border-ink bg-brique text-paper-light shadow-riso-ink-sm"
-                : "border-transparent text-ink-soft"
-            )}
-          >
-            <Icon className="size-[21px]" strokeWidth={2.5} aria-hidden />
-            {!hideLabel && label}
-          </Link>
-        )
-      })}
+          return (
+            <Link
+              key={href}
+              href={href}
+              aria-current={active ? "page" : undefined}
+              aria-label={hideLabel ? label : undefined}
+              className={cn(
+                "flex min-h-11 flex-1 flex-col items-center justify-center gap-1 rounded-[8px] border-2 py-1.5 font-display text-[9px] uppercase leading-none transition-colors",
+                active
+                  ? "border-ink bg-brique text-paper-light shadow-riso-ink-sm"
+                  : "border-transparent text-ink-soft"
+              )}
+            >
+              <Icon
+                className={hideLabel ? "size-[26px]" : "size-[21px]"}
+                strokeWidth={2.5}
+                aria-hidden
+              />
+              {!hideLabel && label}
+            </Link>
+          )
+        })}
+      </div>
     </nav>
   )
 }

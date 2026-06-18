@@ -70,7 +70,7 @@ function AddTaskBar({ onAdd, disabled = false }: AddTaskBarProps) {
         placeholder="Ajouter une tâche…"
         maxLength={TITLE_MAX}
         aria-label="Ajouter une tâche"
-        className="h-12 w-full bg-transparent text-base font-medium text-ink outline-none placeholder:font-body placeholder:text-ink/55 disabled:opacity-50"
+        className="h-12 w-full bg-transparent text-base font-medium text-ink outline-none placeholder:font-body placeholder:text-ink-soft disabled:opacity-50"
       />
 
       {/* Badge de la date choisie — supprimable. */}
@@ -82,7 +82,7 @@ function AddTaskBar({ onAdd, disabled = false }: AddTaskBarProps) {
             onClick={() => setDue("")}
             disabled={disabled}
             aria-label="Retirer l’échéance"
-            className="-mr-0.5 inline-flex items-center justify-center rounded-[3px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-ink"
+            className="relative -mr-0.5 inline-flex items-center justify-center rounded-[3px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-ink before:absolute before:left-1/2 before:top-1/2 before:size-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-['']"
           >
             <X className="size-3" strokeWidth={3} aria-hidden />
           </button>
@@ -97,8 +97,7 @@ function AddTaskBar({ onAdd, disabled = false }: AddTaskBarProps) {
           disabled={disabled}
           aria-label="Choisir une échéance"
           className={cn(
-            "inline-flex size-9 items-center justify-center rounded-[8px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-ink active:translate-x-px active:translate-y-px disabled:opacity-50",
-            due && "text-brique",
+            "inline-flex size-11 items-center justify-center rounded-[8px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-ink active:translate-x-px active:translate-y-px disabled:opacity-50",
           )}
         >
           <CalendarPlus className="size-5" strokeWidth={2.5} aria-hidden />

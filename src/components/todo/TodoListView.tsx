@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { ArrowLeft, Pencil } from "lucide-react"
+import { ArrowLeft } from "lucide-react"
 import {
   useEffect,
   useMemo,
@@ -33,6 +33,8 @@ export type TodoMemberView = {
 export type TaskView = {
   id: string
   title: string
+  /** Note libre optionnelle, affichée en petits caractères sous l'intitulé. */
+  note: string | null
   dueDate: string | null
   isDone: boolean
   addedBy: string | null
@@ -65,6 +67,13 @@ type TodoListViewProps = {
 type OptimisticAction =
   | { kind: "toggle"; id: string; done: boolean }
   | { kind: "add"; task: TaskView }
+  | {
+      kind: "edit"
+      id: string
+      title: string
+      note: string | null
+      dueDate: string | null
+    }
   | { kind: "delete"; id: string }
 
 /**
@@ -86,6 +95,17 @@ function applyTaskAction(
       )
     case "add":
       return [action.task, ...current]
+    case "edit":
+      return current.map((t) =>
+        t.id === action.id
+          ? {
+              ...t,
+              title: action.title,
+              note: action.note,
+              dueDate: action.dueDate,
+            }
+          : t,
+      )
     case "delete":
       return current.filter((t) => t.id !== action.id)
   }
@@ -178,6 +198,7 @@ export function TodoListView({
     const optimisticTask: TaskView = {
       id: `tmp_${Date.now()}_${Math.random().toString(36).slice(2)}`,
       title,
+      note: null,
       dueDate: iso,
       isDone: false,
       addedBy: currentMemberId,
@@ -206,6 +227,32 @@ export function TodoListView({
         listId,
         taskId,
         done: next,
+      })
+      if (!result.ok) setError(result.error)
+    })
+  }
+
+  function handleEdit(
+    taskId: string,
+    patch: { title: string; note: string | null; dueDate: string | null },
+  ) {
+    setError(undefined)
+    const action: OptimisticAction = {
+      kind: "edit",
+      id: taskId,
+      title: patch.title,
+      note: patch.note,
+      dueDate: patch.dueDate,
+    }
+    startAction(async () => {
+      applyOptimistic(action)
+      rememberIfOffline(action)
+      const result = await runMutation("editTask", {
+        listId,
+        taskId,
+        rawTitle: patch.title,
+        note: patch.note,
+        dueDate: patch.dueDate,
       })
       if (!result.ok) setError(result.error)
     })
@@ -245,18 +292,7 @@ export function TodoListView({
           <ArrowLeft className="size-4" strokeWidth={2.5} aria-hidden />
           Listes
         </Link>
-        <div className="mt-1 flex items-center justify-between gap-2">
-          <h1 className="font-display text-xl uppercase text-ink">{name}</h1>
-          {/* Crayon (renommer) — désactivé tant que le module to-do n'est pas câblé. */}
-          <button
-            type="button"
-            disabled
-            aria-label="Renommer la liste (bientôt disponible)"
-            className="inline-flex size-11 shrink-0 items-center justify-center rounded-[8px] text-ink-soft opacity-50"
-          >
-            <Pencil className="size-5" strokeWidth={2.5} aria-hidden />
-          </button>
-        </div>
+        <h1 className="mt-1 font-display text-xl uppercase text-ink">{name}</h1>
       </div>
 
       <div className="flex flex-col gap-5">
@@ -284,12 +320,14 @@ export function TodoListView({
                     key={task.id}
                     id={task.id}
                     title={task.title}
+                    note={task.note}
                     dueDate={task.dueDate}
                     isDone={task.isDone}
                     member={
                       task.addedBy ? membersById.get(task.addedBy) ?? null : null
                     }
                     onToggle={handleToggle}
+                    onEdit={handleEdit}
                     onDelete={handleDelete}
                   />
                 ))}
@@ -301,6 +339,7 @@ export function TodoListView({
               tasks={done}
               membersById={membersById}
               onToggle={handleToggle}
+              onEdit={handleEdit}
               onDelete={handleDelete}
             />
           </>

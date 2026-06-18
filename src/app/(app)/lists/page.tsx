@@ -2,6 +2,7 @@ import { redirect } from "next/navigation"
 
 import { createClient } from "@/lib/supabase/server"
 import { requireAuth } from "@/lib/supabase/auth"
+import { purchaseArchiveCutoffMs } from "@/lib/purchase-window"
 
 import { ListsManager, type ListView } from "./lists-client"
 
@@ -95,7 +96,16 @@ export default async function ListsPage() {
     byList.set(listId, agg)
   }
 
+  // Articles cochés depuis plus de 24h : ils ont quitté la liste active pour
+  // l'historique des achats. On ne les compte donc plus (ni « total » ni
+  // « à acheter ») — la tuile reflète la liste vivante, pas le passé.
+  const archiveCutoff = purchaseArchiveCutoffMs()
+
   for (const item of items ?? []) {
+    if (item.is_checked && item.checked_at) {
+      const ms = Date.parse(item.checked_at)
+      if (Number.isFinite(ms) && ms < archiveCutoff) continue
+    }
     bump(item.list_id, !item.is_checked, item.created_at, item.checked_at)
   }
 

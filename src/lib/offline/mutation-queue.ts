@@ -31,6 +31,7 @@ import {
 import {
   addTask,
   deleteTask,
+  editTask,
   toggleTask,
 } from "@/app/(app)/lists/[listId]/task-actions"
 import {
@@ -69,6 +70,13 @@ export type MutationPayloads = {
   // To-do list (V2). `dueDate` est déjà sérialisé en ISO « yyyy-mm-dd » | null.
   toggleTask: { listId: string; taskId: string; done: boolean }
   addTask: { listId: string; rawTitle: string; dueDate: string | null }
+  editTask: {
+    listId: string
+    taskId: string
+    rawTitle: string
+    note: string | null
+    dueDate: string | null
+  }
   deleteTask: { listId: string; taskId: string }
 }
 
@@ -85,6 +93,14 @@ const HANDLERS: {
   toggleTask: (p) => toggleTask(p.listId, p.taskId, p.done),
   addTask: (p) =>
     addTask({ listId: p.listId, rawTitle: p.rawTitle, dueDate: p.dueDate }),
+  editTask: (p) =>
+    editTask({
+      listId: p.listId,
+      taskId: p.taskId,
+      rawTitle: p.rawTitle,
+      note: p.note,
+      dueDate: p.dueDate,
+    }),
   deleteTask: (p) => deleteTask(p.listId, p.taskId),
 }
 

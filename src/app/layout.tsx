@@ -54,8 +54,8 @@ export const viewport: Viewport = {
   themeColor: "#F0E5D0",
   width: "device-width",
   initialScale: 1,
-  // mobile-first : évite le zoom auto au focus des champs
-  maximumScale: 1,
+  // Zoom utilisateur laissé libre (accessibilité). L'anti-zoom auto au focus
+  // sur iOS est assuré par les champs en text-base (16px), pas par maximumScale.
   viewportFit: "cover",
 };
 
