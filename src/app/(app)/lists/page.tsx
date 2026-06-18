@@ -27,7 +27,7 @@ export default async function ListsPage() {
   const [listsRes, membersRes] = await Promise.all([
     supabase
       .from("lists")
-      .select("id, name, kind, is_shared, created_at")
+      .select("id, name, kind, is_shared, owner_id, created_at")
       .eq("couple_id", profile.couple_id)
       .order("position", { ascending: true }),
     // Membres du couple : on en tire le prénom de la conjointe pour la case
@@ -115,6 +115,13 @@ export default async function ListsPage() {
       kind: l.kind === "todo" ? "todo" : "courses",
       // Partage : les listes V1 sont partagées par défaut après migration.
       isShared: l.is_shared === true,
+      // Couleur d'identité du propriétaire pour le logo des listes non partagées
+      // (toi = sauge, la conjointe = brique). Null si propriétaire inconnu.
+      ownerColor: l.owner_id
+        ? l.owner_id === user.id
+          ? "sauge"
+          : "brique"
+        : null,
       total: agg?.total ?? 0,
       unchecked: agg?.unchecked ?? 0,
       updatedAt: Number.isFinite(lastMs) ? new Date(lastMs).toISOString() : null,
