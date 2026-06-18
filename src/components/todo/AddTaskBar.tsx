@@ -86,9 +86,17 @@ function AddTaskBar({ onAdd, disabled = false }: AddTaskBarProps) {
       <RisoDatePicker
         value={due}
         onChange={(v) => {
+          // Si une date est choisie et qu'un nom est déjà saisi, on enregistre
+          // directement la tâche (le calendrier étant la dernière étape sur mobile).
+          if (v && trimmed) {
+            onAdd(trimmed, parseDateInput(v))
+            setTitle("")
+            setDue("")
+            requestAnimationFrame(() => inputRef.current?.focus())
+            return
+          }
           setDue(v)
-          // Après le choix de la date, on rend le focus au champ pour qu'« Entrée »
-          // enregistre la tâche directement (sinon le focus est perdu sur le body).
+          // Sinon (nom vide), on rend le focus au champ pour qu'« Entrée » enregistre.
           requestAnimationFrame(() => inputRef.current?.focus())
         }}
         disabled={disabled}
