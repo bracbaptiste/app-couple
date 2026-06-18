@@ -1,9 +1,9 @@
 "use client"
 
-import { CalendarPlus, Plus, X } from "lucide-react"
-import { useRef, useState } from "react"
+import { Plus, X } from "lucide-react"
+import { useState } from "react"
 
-import { cn } from "@/lib/utils"
+import { RisoDatePicker } from "@/components/ui/riso-date-picker"
 import { getDueLabel } from "@/lib/hooks/useTaskState"
 
 /**
@@ -33,18 +33,9 @@ function parseDateInput(value: string): Date {
 
 function AddTaskBar({ onAdd, disabled = false }: AddTaskBarProps) {
   const [title, setTitle] = useState("")
-  // Échéance au format « yyyy-mm-dd » (valeur d'un <input type="date">).
+  // Échéance au format « yyyy-mm-dd » (valeur du RisoDatePicker).
   const [due, setDue] = useState("")
-  const dateInputRef = useRef<HTMLInputElement>(null)
   const trimmed = title.trim()
-
-  function openDatePicker() {
-    const el = dateInputRef.current
-    if (!el) return
-    // showPicker() (navigateurs récents) ; sinon focus déclenche l'ouverture.
-    if (typeof el.showPicker === "function") el.showPicker()
-    else el.focus()
-  }
 
   function submit() {
     if (!trimmed) return
@@ -89,30 +80,8 @@ function AddTaskBar({ onAdd, disabled = false }: AddTaskBarProps) {
         </span>
       )}
 
-      {/* Bouton calendrier + input date natif (masqué, ouvert via le bouton). */}
-      <div className="relative shrink-0">
-        <button
-          type="button"
-          onClick={openDatePicker}
-          disabled={disabled}
-          aria-label="Choisir une échéance"
-          className={cn(
-            "inline-flex size-11 items-center justify-center rounded-[8px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-ink active:translate-x-px active:translate-y-px disabled:opacity-50",
-          )}
-        >
-          <CalendarPlus className="size-5" strokeWidth={2.5} aria-hidden />
-        </button>
-        <input
-          ref={dateInputRef}
-          type="date"
-          value={due}
-          disabled={disabled}
-          onChange={(e) => setDue(e.target.value)}
-          tabIndex={-1}
-          aria-hidden
-          className="pointer-events-none absolute bottom-0 right-0 size-0 opacity-0"
-        />
-      </div>
+      {/* Calendrier maison aux couleurs de l'appli (remplace le picker natif). */}
+      <RisoDatePicker value={due} onChange={setDue} disabled={disabled} />
     </form>
   )
 }

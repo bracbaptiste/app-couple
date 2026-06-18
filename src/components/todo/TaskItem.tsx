@@ -1,11 +1,12 @@
 "use client"
 
-import { CalendarPlus, Pencil, Trash2, X } from "lucide-react"
+import { Pencil, Trash2, X } from "lucide-react"
 import { useRef, useState } from "react"
 
 import { AddedByMarker } from "@/components/ui/added-by-marker"
 import { RisoButton } from "@/components/ui/riso-button"
 import { RisoCheckbox } from "@/components/ui/riso-checkbox"
+import { RisoDatePicker } from "@/components/ui/riso-date-picker"
 import { RisoInput } from "@/components/ui/riso-input"
 import { cn } from "@/lib/utils"
 import { getDueLabel, getTaskState } from "@/lib/hooks/useTaskState"
@@ -101,7 +102,6 @@ function TaskItem({
   const [editTitle, setEditTitle] = useState(title)
   const [editNote, setEditNote] = useState(note ?? "")
   const [editDue, setEditDue] = useState(toDateInputValue(dueDate))
-  const dateInputRef = useRef<HTMLInputElement>(null)
 
   const canEdit = !!onEdit
   const canDelete = !!onDelete
@@ -142,13 +142,6 @@ function TaskItem({
       dueDate: editDue || null,
     })
     setMode(null)
-  }
-
-  function openDatePicker() {
-    const el = dateInputRef.current
-    if (!el) return
-    if (typeof el.showPicker === "function") el.showPicker()
-    else el.focus()
   }
 
   function onSwipePointerDown(e: React.PointerEvent) {
@@ -303,25 +296,8 @@ function TaskItem({
                   Pas d’échéance
                 </span>
               )}
-              <div className="relative shrink-0">
-                <button
-                  type="button"
-                  onClick={openDatePicker}
-                  aria-label="Choisir une échéance"
-                  className="inline-flex size-9 items-center justify-center rounded-[8px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-ink active:translate-x-px active:translate-y-px"
-                >
-                  <CalendarPlus className="size-5" strokeWidth={2.5} aria-hidden />
-                </button>
-                <input
-                  ref={dateInputRef}
-                  type="date"
-                  value={editDue}
-                  onChange={(e) => setEditDue(e.target.value)}
-                  tabIndex={-1}
-                  aria-hidden
-                  className="pointer-events-none absolute bottom-0 right-0 size-0 opacity-0"
-                />
-              </div>
+              {/* Calendrier maison aux couleurs de l'appli. */}
+              <RisoDatePicker value={editDue} onChange={setEditDue} size="sm" />
             </div>
 
             <div className="flex gap-1.5">
