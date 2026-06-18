@@ -143,7 +143,9 @@ function NewListForm({
         type="text"
         value={name}
         onChange={(e) => setName(e.target.value)}
-        placeholder="Ex : Démarches admin"
+        placeholder={
+          kind === "courses" ? "Ex : Courses de la semaine" : "Ex : Préparer les vacances"
+        }
         maxLength={50}
         autoComplete="off"
         autoFocus
