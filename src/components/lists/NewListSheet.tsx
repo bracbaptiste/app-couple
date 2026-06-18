@@ -8,6 +8,7 @@ import { useFormStatus } from "react-dom"
 import { RisoButton } from "@/components/ui/riso-button"
 import { RisoInput } from "@/components/ui/riso-input"
 import { FormFeedback } from "@/app/(auth)/form-ui"
+import { useSwipeDismiss } from "@/lib/hooks/useSwipeDismiss"
 import { cn } from "@/lib/utils"
 
 import { createList, type ActionResult } from "@/app/(app)/lists/actions"
@@ -34,19 +35,36 @@ export function NewListSheet({
   onOpenChange: (open: boolean) => void
   partnerName: string | null
 }) {
+  // Glisser la feuille vers le bas pour la refermer (revenir en arrière sans
+  // créer de liste). Suit le doigt et snap-back si on ne va pas assez loin.
+  const { offset, dragging, releasing, onTransitionEnd, swipeHandlers } =
+    useSwipeDismiss({ onDismiss: () => onOpenChange(false) })
+
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Backdrop className="fixed inset-0 z-40 bg-ink/55 transition-opacity data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 motion-reduce:transition-none" />
         <Dialog.Popup
           className={cn(
-            "fixed inset-x-0 bottom-0 z-50 mx-auto w-full max-w-sm",
+            "fixed inset-x-0 bottom-0 z-50 mx-auto w-full max-w-sm touch-none",
             "rounded-t-[22px] border-t-[2.5px] border-ink bg-paper px-[22px] pb-7 pt-[22px]",
             "transition-transform data-[ending-style]:translate-y-full data-[starting-style]:translate-y-full motion-reduce:transition-none",
           )}
           initialFocus={false}
+          // Pendant le glissement, le `translateY` inline suit le doigt (sans
+          // transition) ; au snap-back il anime jusqu'à 0 via la transition du
+          // className ; au repos on rend la main aux animations d'ouverture.
+          style={
+            dragging
+              ? { transform: `translateY(${offset}px)`, transition: "none" }
+              : releasing
+                ? { transform: `translateY(${offset}px)` }
+                : undefined
+          }
+          onTransitionEnd={onTransitionEnd}
+          {...swipeHandlers}
         >
-          {/* Poignée décorative du sheet */}
+          {/* Poignée (glisser vers le bas pour fermer). */}
           <div className="mx-auto mb-[18px] h-[5px] w-12 rounded-full bg-ink" />
 
           <Dialog.Title className="mb-[18px] text-center font-display text-[22px] uppercase leading-none tracking-tight text-ink">

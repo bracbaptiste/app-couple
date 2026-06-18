@@ -427,7 +427,10 @@ function LibraryRow({
           accessible au clavier : recevoir le focus ouvre la ligne. */}
       {mode === null && (
         <div
-          className="absolute inset-y-0 right-0 z-0 flex"
+          // Bordure encre continue autour du calque révélé (haut/droite/bas
+          // + coins droits arrondis) : prolonge le trait de la carte pour que
+          // toute la rangée garde un contour encre fermé une fois ouverte.
+          className="absolute inset-y-0 right-0 z-0 flex overflow-hidden rounded-r-[10px] border-y-2 border-r-2 border-ink"
           onFocus={() => setOffset(-SWIPE_REVEAL)}
           onBlur={(e) => {
             if (!e.currentTarget.contains(e.relatedTarget as Node)) closeSwipe()
@@ -467,6 +470,10 @@ function LibraryRow({
         className={cn(
           "relative z-10 select-none touch-pan-y rounded-[10px] border-2 border-ink p-2.5",
           selected ? "bg-sauge/40" : "bg-paper-light",
+          // Une fois glissée, on carre le bord droit : son trait encre devient
+          // une verticale franche, au contact du calque vert/brique, sans liseré
+          // de papier dans l'arrondi (au repos, coins arrondis comme avant).
+          (offset !== 0 || dragging) && "rounded-r-none",
           mode === null
             ? dragging
               ? ""

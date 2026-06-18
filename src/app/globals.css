@@ -38,12 +38,16 @@
   --color-brique: #a2493d;
   --color-sauge: #7b9e89;
 
-  /* Ombres décalées riso (shadow-riso-*) */
-  --shadow-riso-sauge: 4px 4px 0 #7b9e89;
-  --shadow-riso-brique: 4px 4px 0 #c5594a;
-  --shadow-riso-ink: 4px 4px 0 #1a1410;
-  --shadow-riso-ink-sm: 2px 2px 0 #1a1410;
-  --shadow-riso-ink-lg: 5px 5px 0 #1a1410;
+  /* Ombres décalées riso (shadow-riso-*)
+     Le `spread` (4e valeur) élargit l'ombre de façon concentrique pour qu'elle
+     épouse les coins arrondis et reste collée à la boîte, sans liseré de papier
+     dans l'arrondi (coins haut-droit / bas-gauche). Le spread reste < décalage,
+     donc l'ombre garde sa direction (rien ne dépasse en haut / à gauche). */
+  --shadow-riso-sauge: 4px 4px 0 2px #7b9e89;
+  --shadow-riso-brique: 4px 4px 0 2px #a2493d;
+  --shadow-riso-ink: 4px 4px 0 2px #1a1410;
+  --shadow-riso-ink-sm: 2px 2px 0 1px #1a1410;
+  --shadow-riso-ink-lg: 5px 5px 0 2px #1a1410;
 
   /* Typographies (variables injectées par next/font dans layout.tsx) */
   --font-display: var(--font-silkscreen);
@@ -65,7 +69,7 @@
   --card-foreground: #1a1410;
   --popover: #f0e5d0;
   --popover-foreground: #1a1410;
-  --primary: #c5594a; /* brique */
+  --primary: #a2493d; /* brique */
   --primary-foreground: #fbf4e2; /* paper-light */
   --secondary: #7b9e89; /* sauge */
   --secondary-foreground: #1a1410;
@@ -73,7 +77,7 @@
   --muted-foreground: #5c4f40; /* ink-soft */
   --accent: #7b9e89; /* sauge */
   --accent-foreground: #1a1410;
-  --destructive: #c5594a;
+  --destructive: #a2493d;
   --border: #1a1410; /* ink — bordures encrées partout */
   --input: #1a1410;
   --ring: #7b9e89; /* sauge */

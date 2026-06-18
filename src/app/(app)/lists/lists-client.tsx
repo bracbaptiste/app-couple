@@ -151,7 +151,7 @@ function ListGroup({
   hintListId: string | null
 }) {
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-5">
       <SectionMarker kind={kind} />
       <ul className="flex flex-col gap-3.5">
         {lists.map((list, index) => (
@@ -269,7 +269,10 @@ function ListTile({
             crayon visible), il doit donc rester pleinement accessible. */}
         {mode === null && (
           <div
-            className="absolute inset-y-0 right-0 z-0 flex"
+            // Bordure encre continue autour du calque révélé (haut/droite/bas
+            // + coins droits arrondis) : prolonge le trait de la carte pour que
+            // toute la rangée garde un contour encre fermé une fois ouverte.
+            className="absolute inset-y-0 right-0 z-0 flex overflow-hidden rounded-r-[12px] border-y-2 border-r-2 border-ink"
             onFocus={() => setOffset(-SWIPE_REVEAL)}
             onBlur={(e) => {
               // Le focus quitte le calque (vers un élément hors de lui) → refermer.
@@ -336,7 +339,17 @@ function ListTile({
             }
           }}
         >
-      <RisoCard shadow="none" padding="default" className="relative">
+      <RisoCard
+        shadow="none"
+        padding="default"
+        className={cn(
+          "relative",
+          // Une fois glissée, on carre le bord droit : son trait encre devient
+          // une verticale franche, au contact du calque vert/brique, sans liseré
+          // de papier dans l'arrondi (au repos, coins arrondis comme avant).
+          (offset !== 0 || dragging) && "rounded-r-none",
+        )}
+      >
         {/* Repère de découvrabilité : petite languette encre sur le bord droit,
             qui signale que la carte se tire vers la gauche pour révéler les
             actions. Cliquable (souris/tactile) → ouvre directement le calque,

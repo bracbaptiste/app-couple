@@ -56,7 +56,7 @@ const SWATCHES = [
   { name: "Papier profond", hex: "#E5D7BC", className: "bg-paper-deep" },
   { name: "Encre", hex: "#1A1410", className: "bg-ink" },
   { name: "Encre soft", hex: "#5C4F40", className: "bg-ink-soft" },
-  { name: "Brique", hex: "#C5594A", className: "bg-brique" },
+  { name: "Brique", hex: "#A2493D", className: "bg-brique" },
   { name: "Sauge", hex: "#7B9E89", className: "bg-sauge" },
 ]
 
