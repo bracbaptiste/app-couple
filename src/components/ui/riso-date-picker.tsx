@@ -82,29 +82,52 @@ function RisoDatePicker({
     const base = v ?? new Date()
     return new Date(base.getFullYear(), base.getMonth(), 1)
   })
+  // Sélection « en cours » dans la modale : permet de faire bouger la pastille
+  // de suite au tap, avant la fermeture (la valeur remontée au parent ne change
+  // qu'à ce moment-là). Resynchronisée à chaque ouverture.
+  const [draft, setDraft] = useState(value)
   const panelRef = useRef<HTMLDivElement>(null)
+  // Minuterie de fermeture différée (laisse voir la sélection se déplacer).
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const selected = parseValue(value)
+  const selected = parseValue(draft)
   const today = new Date()
 
-  // À l'ouverture : on recale la grille sur la date choisie (ou le mois courant).
+  // À l'ouverture : on recale la grille sur la date choisie (ou le mois courant)
+  // et on resynchronise la sélection en cours.
   function openPicker() {
     const v = parseValue(value)
     const base = v ?? new Date()
     setViewMonth(new Date(base.getFullYear(), base.getMonth(), 1))
+    setDraft(value)
     setOpen(true)
   }
 
+  function close() {
+    if (closeTimer.current) {
+      clearTimeout(closeTimer.current)
+      closeTimer.current = null
+    }
+    setOpen(false)
+  }
+
   // Pendant l'ouverture : focus dans la modale + fermeture à la touche Échap.
+  // Au démontage / à la fermeture, on purge la minuterie en attente.
   useEffect(() => {
     if (!open) return
     panelRef.current?.focus()
 
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false)
+      if (e.key === "Escape") close()
     }
     document.addEventListener("keydown", onKey)
-    return () => document.removeEventListener("keydown", onKey)
+    return () => {
+      document.removeEventListener("keydown", onKey)
+      if (closeTimer.current) {
+        clearTimeout(closeTimer.current)
+        closeTimer.current = null
+      }
+    }
   }, [open])
 
   function changeMonth(delta: number) {
@@ -112,8 +135,16 @@ function RisoDatePicker({
   }
 
   function pick(day: Date) {
-    onChange(formatValue(day))
-    setOpen(false)
+    const v = formatValue(day)
+    // La pastille saute aussitôt sur la date tapée…
+    setDraft(v)
+    // …puis on remonte la valeur et on ferme, après un court délai de confiance.
+    if (closeTimer.current) clearTimeout(closeTimer.current)
+    closeTimer.current = setTimeout(() => {
+      onChange(v)
+      closeTimer.current = null
+      setOpen(false)
+    }, 180)
   }
 
   // Grille : cases vides avant le 1er (offset lundi) puis les jours du mois.
@@ -164,7 +195,7 @@ function RisoDatePicker({
               type="button"
               aria-label="Fermer"
               tabIndex={-1}
-              onClick={() => setOpen(false)}
+              onClick={close}
               className="absolute inset-0 bg-ink/40"
             />
 
@@ -247,7 +278,7 @@ function RisoDatePicker({
                   size="sm"
                   onClick={() => {
                     onChange("")
-                    setOpen(false)
+                    close()
                   }}
                 >
                   Effacer
