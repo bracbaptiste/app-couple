@@ -1,7 +1,7 @@
 "use client"
 
 import { Plus, X } from "lucide-react"
-import { useState } from "react"
+import { useRef, useState } from "react"
 
 import { RisoDatePicker } from "@/components/ui/riso-date-picker"
 import { getDueLabel } from "@/lib/hooks/useTaskState"
@@ -35,6 +35,7 @@ function AddTaskBar({ onAdd, disabled = false }: AddTaskBarProps) {
   const [title, setTitle] = useState("")
   // Échéance au format « yyyy-mm-dd » (valeur du RisoDatePicker).
   const [due, setDue] = useState("")
+  const inputRef = useRef<HTMLInputElement>(null)
   const trimmed = title.trim()
 
   function submit() {
@@ -54,6 +55,7 @@ function AddTaskBar({ onAdd, disabled = false }: AddTaskBarProps) {
     >
       <Plus className="size-5 shrink-0 text-ink" strokeWidth={2.5} aria-hidden />
       <input
+        ref={inputRef}
         type="text"
         value={title}
         disabled={disabled}
@@ -81,7 +83,16 @@ function AddTaskBar({ onAdd, disabled = false }: AddTaskBarProps) {
       )}
 
       {/* Calendrier maison aux couleurs de l'appli (remplace le picker natif). */}
-      <RisoDatePicker value={due} onChange={setDue} disabled={disabled} />
+      <RisoDatePicker
+        value={due}
+        onChange={(v) => {
+          setDue(v)
+          // Après le choix de la date, on rend le focus au champ pour qu'« Entrée »
+          // enregistre la tâche directement (sinon le focus est perdu sur le body).
+          requestAnimationFrame(() => inputRef.current?.focus())
+        }}
+        disabled={disabled}
+      />
     </form>
   )
 }
