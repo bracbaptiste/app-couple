@@ -1,6 +1,7 @@
 "use client"
 
-import { MoreHorizontal, Pencil, Trash2 } from "lucide-react"
+import Link from "next/link"
+import { Pencil, Trash2 } from "lucide-react"
 import {
   useEffect,
   useMemo,
@@ -45,6 +46,8 @@ export type ItemView = {
   quantity: string | null
   note: string | null
   isChecked: boolean
+  /** Horodatage ISO du cochage (= « acheté le »), ou `null` si à acheter. */
+  checkedAt: string | null
   /** Rayon du produit, ou `null` si non rangé. */
   categoryId: string | null
   /** Profil ayant ajouté l'article, ou `null`. */
@@ -68,7 +71,13 @@ const NO_CATEGORY = "__none__"
  * d'une section à l'autre sans attendre le serveur :
  *   - `toggle` : coché ⇄ « Déjà pris » (porté par le list_item).
  */
-type OptimisticAction = { kind: "toggle"; id: string; checked: boolean }
+type OptimisticAction = {
+  kind: "toggle"
+  id: string
+  checked: boolean
+  /** Horodatage optimiste du cochage (ISO), ou `null` au décochage. */
+  checkedAt: string | null
+}
 
 /**
  * Réducteur partagé : applique UNE action de cochage à la liste d'articles.
@@ -83,7 +92,9 @@ function applyOptimisticAction(
   action: OptimisticAction,
 ): ItemView[] {
   return current.map((it) =>
-    it.id === action.id ? { ...it, isChecked: action.checked } : it,
+    it.id === action.id
+      ? { ...it, isChecked: action.checked, checkedAt: action.checkedAt }
+      : it,
   )
 }
 
@@ -157,7 +168,12 @@ export function ListDetail({
 
   function handleToggle(itemId: string, next: boolean) {
     setActionError(undefined)
-    const action: OptimisticAction = { kind: "toggle", id: itemId, checked: next }
+    const action: OptimisticAction = {
+      kind: "toggle",
+      id: itemId,
+      checked: next,
+      checkedAt: next ? new Date().toISOString() : null,
+    }
     startAction(async () => {
       // Application optimiste DANS la transition : la section bouge tout de suite.
       applyOptimistic(action)
@@ -275,6 +291,19 @@ export function ListDetail({
                   />
                 ))}
               </ul>
+
+              {/* Au bout de 24h, ces articles quittent la liste pour
+                  l'historique des achats (où / quand). */}
+              <p className="px-1 font-mono text-[11px] leading-snug text-ink-soft">
+                Ces articles disparaissent d’ici 24h, puis rejoignent
+                l’historique des achats.
+              </p>
+              <Link
+                href="/profile/purchases"
+                className="self-center rounded-[6px] px-2 py-1 font-body text-[12px] text-ink-soft underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+              >
+                Voir l’historique des achats →
+              </Link>
             </section>
           )}
         </>
@@ -287,7 +316,10 @@ export function ListDetail({
 /*  Ligne d'article                                                            */
 /* -------------------------------------------------------------------------- */
 
-type ItemMode = null | "menu" | "details" | "delete"
+type ItemMode = null | "details" | "delete"
+
+/** Largeur révélée par le swipe : deux cibles tactiles de 64px (≥ 44px requis). */
+const SWIPE_REVEAL = 128
 
 function ItemRow({
   listId,
@@ -320,13 +352,136 @@ function ItemRow({
     })
   }
 
+  // --- Swipe pour révéler les actions (crayon + corbeille) ----------------
+  // Même geste que les tuiles de liste, les tâches et la bibliothèque (Pointer
+  // Events, sans librairie). La ligne glisse vers la gauche de `offset` (≤ 0)
+  // pour découvrir le calque d'actions, qui reste accessible au clavier.
+  const [offset, setOffset] = useState(0)
+  const [dragging, setDragging] = useState(false)
+  const pointerActive = useRef(false)
+  const dragStartX = useRef(0)
+  const dragStartOffset = useRef(0)
+  // Vrai dès que le pointeur a réellement glissé (≥ seuil) : sert à avaler le
+  // `click` que le navigateur émet à la fin d'un drag (sinon il cocherait
+  // l'article ou refermerait la ligne).
+  const didDrag = useRef(false)
+
+  function closeSwipe() {
+    setOffset(0)
+  }
+
+  function onSwipePointerDown(e: React.PointerEvent) {
+    // Pas de swipe quand un panneau (détails / suppression) est ouvert.
+    if (mode !== null) return
+    pointerActive.current = true
+    dragStartX.current = e.clientX
+    dragStartOffset.current = offset
+    didDrag.current = false
+  }
+
+  function onSwipePointerMove(e: React.PointerEvent) {
+    if (!pointerActive.current) return
+    const dx = e.clientX - dragStartX.current
+    if (!didDrag.current) {
+      if (Math.abs(dx) <= 5) return // sous le seuil : peut-être un simple tap
+      didDrag.current = true
+      setDragging(true)
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId)
+      } catch {
+        // Capture refusée (rare) : le drag marche tant que le pointeur reste là.
+      }
+    }
+    setOffset(Math.max(-SWIPE_REVEAL, Math.min(0, dragStartOffset.current + dx)))
+  }
+
+  function onSwipePointerEnd() {
+    if (!pointerActive.current) return
+    pointerActive.current = false
+    if (!didDrag.current) return // simple tap : rien à snapper
+    setDragging(false)
+    setOffset((o) => (o < -SWIPE_REVEAL / 2 ? -SWIPE_REVEAL : 0))
+  }
+
   return (
     <li
       className={cn(
-        "rounded-[10px] border-2 border-ink bg-paper-light p-2 transition-opacity",
+        "relative overflow-hidden rounded-[10px] transition-opacity",
         checked && "opacity-55",
       )}
     >
+      {/* Calque d'actions (Quantité/note + Supprimer), révélé par le glissement
+          et accessible au clavier : recevoir le focus ouvre la ligne. */}
+      {mode === null && (
+        <div
+          className="absolute inset-y-0 right-0 z-0 flex"
+          onFocus={() => setOffset(-SWIPE_REVEAL)}
+          onBlur={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node)) closeSwipe()
+          }}
+        >
+          <button
+            type="button"
+            aria-label={`Quantité / note de ${item.name}`}
+            disabled={isPending}
+            onClick={() => {
+              closeSwipe()
+              setMode("details")
+            }}
+            className="inline-flex w-16 items-center justify-center bg-sauge text-ink outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ink disabled:opacity-50"
+          >
+            <Pencil className="size-5" strokeWidth={2.5} aria-hidden />
+          </button>
+          <button
+            type="button"
+            aria-label={`Supprimer ${item.name}`}
+            disabled={isPending}
+            onClick={() => {
+              closeSwipe()
+              setError(undefined)
+              setMode("delete")
+            }}
+            className="inline-flex w-16 items-center justify-center border-l-2 border-ink bg-brique text-paper-light outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-paper-light disabled:opacity-50"
+          >
+            <Trash2 className="size-5" strokeWidth={2.5} aria-hidden />
+          </button>
+        </div>
+      )}
+
+      {/* Carte au premier plan : glisse via translateX. `touch-pan-y` laisse le
+          scroll vertical au navigateur et nous réserve l'horizontale. */}
+      <div
+        className={cn(
+          "relative z-10 select-none touch-pan-y rounded-[10px] border-2 border-ink bg-paper-light p-2",
+          mode === null
+            ? dragging
+              ? ""
+              : "transition-transform duration-200 ease-out motion-reduce:transition-none"
+            : "",
+        )}
+        style={
+          mode === null ? { transform: `translateX(${offset}px)` } : undefined
+        }
+        onPointerDown={onSwipePointerDown}
+        onPointerMove={onSwipePointerMove}
+        onPointerUp={onSwipePointerEnd}
+        onPointerCancel={onSwipePointerEnd}
+        onClickCapture={(e) => {
+          // Click de fin de glissement : on l'avale (pas de cochage parasite).
+          if (didDrag.current) {
+            e.preventDefault()
+            e.stopPropagation()
+            didDrag.current = false
+            return
+          }
+          // Tap sur une ligne déjà ouverte : on referme au lieu de cocher.
+          if (offset !== 0) {
+            e.preventDefault()
+            e.stopPropagation()
+            closeSwipe()
+          }
+        }}
+      >
       <div className="flex items-center gap-1">
         <RisoCheckbox
           checked={checked}
@@ -341,7 +496,7 @@ function ItemRow({
         <div className="min-w-0 flex-1">
           <p
             className={cn(
-              "truncate text-[15px] font-medium leading-tight text-ink",
+              "line-clamp-2 text-[15px] font-medium leading-tight text-ink",
               checked && "line-through",
             )}
           >
@@ -363,38 +518,23 @@ function ItemRow({
           className="mr-0.5"
         />
 
-        {/* Menu « … » */}
-        <button
-          type="button"
-          aria-label="Options de l’article"
-          aria-expanded={mode !== null}
-          onClick={() => setMode((m) => (m === null ? "menu" : null))}
-          className="inline-flex size-11 shrink-0 items-center justify-center rounded-[8px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px"
-        >
-          <MoreHorizontal className="size-5" strokeWidth={2.5} aria-hidden />
-        </button>
       </div>
 
-      {/* Panneaux d'action (un seul à la fois) */}
-      {mode === "menu" && (
-        <div className="mt-2 flex flex-wrap gap-1.5 border-t-2 border-dashed border-ink pt-2">
-          <RisoButton
-            variant="secondary"
-            size="sm"
-            disabled={isPending}
-            onClick={() => setMode("details")}
-          >
-            <Pencil aria-hidden /> Quantité / note
-          </RisoButton>
-          <RisoButton
-            variant="ghost"
-            size="sm"
-            disabled={isPending}
-            onClick={() => setMode("delete")}
-          >
-            <Trash2 aria-hidden /> Supprimer
-          </RisoButton>
-        </div>
+      {/* Repère de découvrabilité du swipe : languette encre sur le bord droit
+          (même rendu que les tuiles de liste). Cliquable → ouvre le calque.
+          aria-hidden + hors tabulation : le clavier passe par les boutons du
+          calque, focusables. */}
+      {mode === null && offset === 0 && (
+        <button
+          type="button"
+          aria-hidden
+          tabIndex={-1}
+          onClick={() => setOffset(-SWIPE_REVEAL)}
+          title="Afficher les actions (ou glisser la ligne vers la gauche)"
+          className="absolute -right-0.5 top-1/2 z-10 inline-flex h-11 w-6 -translate-y-1/2 items-center justify-end outline-none"
+        >
+          <span aria-hidden className="block h-9 w-1.5 rounded-full bg-ink" />
+        </button>
       )}
 
       {mode === "details" && (
@@ -452,6 +592,7 @@ function ItemRow({
           {error}
         </p>
       )}
+      </div>
     </li>
   )
 }
@@ -486,7 +627,7 @@ function DetailsPanel({
           onChange={(e) => setQuantity(e.target.value)}
           placeholder="Ex : 2 kg, ×3"
           maxLength={30}
-          className="h-11 w-full rounded-[8px] border-2 border-ink bg-paper-light px-3 text-base text-ink outline-none placeholder:text-ink-soft/60 focus-visible:shadow-riso-sauge"
+          className="h-11 w-full rounded-[8px] border-2 border-ink bg-paper-light px-3 text-base text-ink outline-none placeholder:text-ink-soft focus-visible:shadow-riso-sauge"
         />
       </div>
       <div className="flex flex-col gap-1.5">

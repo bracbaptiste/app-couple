@@ -112,7 +112,7 @@ export function OfflineIndicator() {
       {showSyncing && (
         <>
           <RefreshCw
-            className="size-3.5 shrink-0 animate-spin"
+            className="size-3.5 shrink-0 animate-spin motion-reduce:animate-none"
             strokeWidth={2.5}
             aria-hidden
           />

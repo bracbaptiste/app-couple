@@ -4,6 +4,7 @@ import { notFound, redirect } from "next/navigation"
 
 import { createClient } from "@/lib/supabase/server"
 import { requireAuth } from "@/lib/supabase/auth"
+import { purchaseArchiveCutoffIso } from "@/lib/purchase-window"
 
 import {
   ListDetail,
@@ -67,13 +68,13 @@ export default async function ListDetailPage({
     const [tasksRes, doneRes, membersRes] = await Promise.all([
       supabase
         .from("tasks")
-        .select("id, title, due_date, is_done, added_by, created_at")
+        .select("id, title, note, due_date, is_done, added_by, created_at")
         .eq("list_id", listId)
         .eq("is_done", false)
         .order("created_at", { ascending: true }),
       supabase
         .from("tasks")
-        .select("id, title, due_date, is_done, added_by, created_at")
+        .select("id, title, note, due_date, is_done, added_by, created_at")
         .eq("list_id", listId)
         .eq("is_done", true)
         .order("done_at", { ascending: false })
@@ -87,6 +88,7 @@ export default async function ListDetailPage({
     const toTaskView = (row: {
       id: string
       title: string
+      note: string | null
       due_date: string | null
       is_done: boolean
       added_by: string | null
@@ -94,6 +96,7 @@ export default async function ListDetailPage({
     }): TaskView => ({
       id: row.id,
       title: row.title,
+      note: row.note,
       dueDate: row.due_date,
       isDone: row.is_done,
       addedBy: row.added_by,
@@ -115,6 +118,7 @@ export default async function ListDetailPage({
           listId={list.id}
           name={list.name}
           members={todoMembers}
+          currentMemberId={profile.id}
           tasks={tasks}
           doneTasks={doneTasks}
         />
@@ -122,14 +126,20 @@ export default async function ListDetailPage({
     )
   }
 
+  // Les articles cochés depuis plus de 24h ont basculé dans l'historique des
+  // achats (/profile/purchases). L'écran ne charge donc que la liste vivante :
+  // les articles à acheter + ceux cochés dans les dernières 24h (« Déjà pris »).
+  const recentCheckedCutoff = purchaseArchiveCutoffIso()
+
   // Articles + produit lié, rayons, membres : en parallèle (pas de N+1).
   const [itemsRes, categoriesRes, membersRes] = await Promise.all([
     supabase
       .from("list_items")
       .select(
-        "id, quantity, note, is_checked, added_by, created_at, library_item_id, library_items(name, category_id)",
+        "id, quantity, note, is_checked, checked_at, added_by, created_at, library_item_id, library_items(name, category_id)",
       )
       .eq("list_id", listId)
+      .or(`is_checked.eq.false,checked_at.gte.${recentCheckedCutoff}`)
       .order("created_at", { ascending: true }),
     supabase
       .from("categories")
@@ -149,6 +159,7 @@ export default async function ListDetailPage({
     quantity: row.quantity,
     note: row.note,
     isChecked: row.is_checked,
+    checkedAt: row.checked_at,
     categoryId: row.library_items?.category_id ?? null,
     addedBy: row.added_by,
   }))

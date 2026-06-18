@@ -29,6 +29,12 @@ import {
   type ActionResult,
 } from "@/app/(app)/lists/[listId]/actions"
 import {
+  addTask,
+  deleteTask,
+  editTask,
+  toggleTask,
+} from "@/app/(app)/lists/[listId]/task-actions"
+import {
   queueAdd,
   queueAll,
   queueRemove,
@@ -43,10 +49,14 @@ import {
  * Charges utiles par type de mutation. Tout doit être SÉRIALISABLE (pas de
  * fonctions ni de FormData) pour survivre dans IndexedDB et au rejeu différé.
  *
- * V1 : seules les mutations de l'écran « détail de liste » sont couvertes — ce
- * sont celles du parcours hors ligne visé (cocher / décocher, éditer, supprimer
- * un article). Les actions sur les listes elles-mêmes (créer/renommer/supprimer
- * une liste) et la bibliothèque restent en ligne uniquement pour l'instant.
+ * Couvertures :
+ *   - Écran « détail de liste » (courses) : cocher/décocher, éditer, supprimer
+ *     un article (parcours hors ligne d'origine V1).
+ *   - Écran « to-do list » (V2) : cocher/décocher, ajouter, supprimer une tâche
+ *     — même résilience hors ligne (cf. TodoListView).
+ *
+ * Les actions sur les listes elles-mêmes (créer/renommer/supprimer une liste) et
+ * la bibliothèque restent en ligne uniquement pour l'instant.
  */
 export type MutationPayloads = {
   toggleItem: { listId: string; itemId: string; checked: boolean }
@@ -57,6 +67,17 @@ export type MutationPayloads = {
     note: string
   }
   deleteItem: { listId: string; itemId: string }
+  // To-do list (V2). `dueDate` est déjà sérialisé en ISO « yyyy-mm-dd » | null.
+  toggleTask: { listId: string; taskId: string; done: boolean }
+  addTask: { listId: string; rawTitle: string; dueDate: string | null }
+  editTask: {
+    listId: string
+    taskId: string
+    rawTitle: string
+    note: string | null
+    dueDate: string | null
+  }
+  deleteTask: { listId: string; taskId: string }
 }
 
 export type MutationType = keyof MutationPayloads
@@ -69,6 +90,18 @@ const HANDLERS: {
   updateItemDetails: (p) =>
     updateItemDetails(p.listId, p.itemId, p.quantity, p.note),
   deleteItem: (p) => deleteItem(p.listId, p.itemId),
+  toggleTask: (p) => toggleTask(p.listId, p.taskId, p.done),
+  addTask: (p) =>
+    addTask({ listId: p.listId, rawTitle: p.rawTitle, dueDate: p.dueDate }),
+  editTask: (p) =>
+    editTask({
+      listId: p.listId,
+      taskId: p.taskId,
+      rawTitle: p.rawTitle,
+      note: p.note,
+      dueDate: p.dueDate,
+    }),
+  deleteTask: (p) => deleteTask(p.listId, p.taskId),
 }
 
 /* -------------------------------------------------------------------------- */

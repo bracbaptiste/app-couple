@@ -37,12 +37,12 @@ export function NewListSheet({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 z-40 bg-ink/55 transition-opacity data-[ending-style]:opacity-0 data-[starting-style]:opacity-0" />
+        <Dialog.Backdrop className="fixed inset-0 z-40 bg-ink/55 transition-opacity data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 motion-reduce:transition-none" />
         <Dialog.Popup
           className={cn(
             "fixed inset-x-0 bottom-0 z-50 mx-auto w-full max-w-sm",
             "rounded-t-[22px] border-t-[2.5px] border-ink bg-paper px-[22px] pb-7 pt-[22px]",
-            "transition-transform data-[ending-style]:translate-y-full data-[starting-style]:translate-y-full",
+            "transition-transform data-[ending-style]:translate-y-full data-[starting-style]:translate-y-full motion-reduce:transition-none",
           )}
           initialFocus={false}
         >
@@ -207,6 +207,8 @@ function CreateSubmit({ disabled }: { disabled: boolean }) {
       type="submit"
       disabled={disabled || pending}
       aria-busy={pending}
+      // Désactivé tant que le nom est vide : on dit pourquoi au survol.
+      title={disabled ? "Donne un nom à la liste" : undefined}
       className="h-[52px] w-full text-sm"
     >
       {pending ? "…" : "Créer"}

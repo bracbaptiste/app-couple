@@ -31,9 +31,22 @@ type DonePanelProps = {
   membersById: Map<string, TodoMemberView>
   /** Décoche une tâche (la renvoie dans les tâches à faire). */
   onToggle: (id: string, next: boolean) => void
+  /** Modifie une tâche faite (intitulé · note · échéance) (optionnel). */
+  onEdit?: (
+    id: string,
+    patch: { title: string; note: string | null; dueDate: string | null },
+  ) => void
+  /** Supprime une tâche faite (optionnel). */
+  onDelete?: (id: string) => void
 }
 
-export function DonePanel({ tasks, membersById, onToggle }: DonePanelProps) {
+export function DonePanel({
+  tasks,
+  membersById,
+  onToggle,
+  onEdit,
+  onDelete,
+}: DonePanelProps) {
   // Replié par défaut quand la section est « chargée » (≥ 3 faites), pour ne pas
   // noyer les tâches à faire ; ouvert si 1-2 (visuel rassurant « tu avances »).
   const [open, setOpen] = useState(tasks.length < 3)
@@ -74,12 +87,15 @@ export function DonePanel({ tasks, membersById, onToggle }: DonePanelProps) {
                 key={task.id}
                 id={task.id}
                 title={task.title}
+                note={task.note}
                 dueDate={task.dueDate}
                 isDone
                 member={
                   task.addedBy ? membersById.get(task.addedBy) ?? null : null
                 }
                 onToggle={onToggle}
+                onEdit={onEdit}
+                onDelete={onDelete}
               />
             ))}
           </ul>
