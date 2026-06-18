@@ -2,14 +2,7 @@
 
 import Link from "next/link"
 import { Pencil, Trash2 } from "lucide-react"
-import {
-  useEffect,
-  useMemo,
-  useOptimistic,
-  useRef,
-  useState,
-  useTransition,
-} from "react"
+import { useMemo, useState, useTransition } from "react"
 
 import { AddedByMarker } from "@/components/ui/added-by-marker"
 import { CategoryHeader } from "@/components/ui/category-header"
@@ -19,7 +12,8 @@ import { cn } from "@/lib/utils"
 import { useRealtimeListItems } from "@/lib/realtime"
 import { runMutation } from "@/lib/offline/mutation-queue"
 import { useOfflineCache } from "@/lib/offline/use-offline-cache"
-import { useOnlineStatus } from "@/lib/offline/use-online-status"
+import { useOfflineOptimistic } from "@/lib/offline/use-offline-optimistic"
+import { useSwipeReveal } from "@/lib/hooks/useSwipeReveal"
 
 import { type ActionResult } from "./actions"
 
@@ -117,8 +111,6 @@ export function ListDetail({
   // (cf. limites dans use-offline-cache.ts).
   useOfflineCache(`list-items:${listId}`, { items, categories, members })
 
-  const online = useOnlineStatus()
-
   // Index prénom/couleur par id de profil, pour le marqueur « ajouté par ».
   const membersById = useMemo(() => {
     const map = new Map<string, MemberView>()
@@ -128,43 +120,16 @@ export function ListDetail({
 
   // État optimiste du cochage, porté au niveau de la liste pour que l'article
   // CHANGE DE SECTION immédiatement (rayon ⇄ « Déjà pris »), sans attendre le
-  // serveur. `useOptimistic` réapplique la valeur optimiste tant que la
-  // transition est en cours, puis revient à `items` (donnée serveur) une fois
-  // la Server Action terminée :
-  //   - succès → `revalidatePath` a déjà mis `items` à jour : aucun saut visuel ;
-  //   - échec  → `items` est inchangé : rollback visuel automatique.
-  const [optimisticItems, applyOptimistic] = useOptimistic(
-    items,
-    applyOptimisticAction,
-  )
-  const [isPending, startAction] = useTransition()
+  // serveur. Optimiste + résilience hors ligne mutualisés (cf.
+  // useOfflineOptimistic) : `displayItems` = état serveur + optimiste en vol +
+  // patches hors ligne ; `apply` applique l'action (et la mémorise hors ligne).
+  const {
+    display: displayItems,
+    isPending,
+    startAction,
+    apply,
+  } = useOfflineOptimistic(items, applyOptimisticAction)
   const [actionError, setActionError] = useState<string | undefined>()
-
-  // Overlay HORS LIGNE : `useOptimistic` annule sa valeur dès que la transition
-  // se termine, or hors ligne le serveur ne revalide rien → sans cet overlay, la
-  // case cochée « rebondirait » à l'état serveur. On accumule donc les actions
-  // faites sans réseau ici (elles persistent) et on les rejoue sur l'affichage.
-  // Au retour du réseau, le rejeu de la file + `router.refresh()` (porté par
-  // l'OfflineIndicator) ramène la vérité serveur : on vide alors l'overlay.
-  const [offlinePatches, setOfflinePatches] = useState<OptimisticAction[]>([])
-  const wasOnline = useRef(true)
-  useEffect(() => {
-    if (online && !wasOnline.current) setOfflinePatches([])
-    wasOnline.current = online
-  }, [online])
-
-  // Affichage = état serveur + optimiste en vol + patches hors ligne persistants.
-  const displayItems = useMemo(
-    () => offlinePatches.reduce(applyOptimisticAction, optimisticItems),
-    [optimisticItems, offlinePatches],
-  )
-
-  /** Mémorise un changement de section s'il est fait hors ligne (sinon no-op). */
-  function rememberIfOffline(action: OptimisticAction) {
-    if (typeof navigator !== "undefined" && navigator.onLine === false) {
-      setOfflinePatches((prev) => [...prev, action])
-    }
-  }
 
   function handleToggle(itemId: string, next: boolean) {
     setActionError(undefined)
@@ -176,8 +141,7 @@ export function ListDetail({
     }
     startAction(async () => {
       // Application optimiste DANS la transition : la section bouge tout de suite.
-      applyOptimistic(action)
-      rememberIfOffline(action)
+      apply(action)
       // `runMutation` exécute la Server Action en ligne, ou enfile l'action hors
       // ligne en renvoyant { ok: true } (l'overlay garde le visuel à jour).
       const result = await runMutation("toggleItem", {
@@ -353,55 +317,17 @@ function ItemRow({
   }
 
   // --- Swipe pour révéler les actions (crayon + corbeille) ----------------
-  // Même geste que les tuiles de liste, les tâches et la bibliothèque (Pointer
-  // Events, sans librairie). La ligne glisse vers la gauche de `offset` (≤ 0)
-  // pour découvrir le calque d'actions, qui reste accessible au clavier.
-  const [offset, setOffset] = useState(0)
-  const [dragging, setDragging] = useState(false)
-  const pointerActive = useRef(false)
-  const dragStartX = useRef(0)
-  const dragStartOffset = useRef(0)
-  // Vrai dès que le pointeur a réellement glissé (≥ seuil) : sert à avaler le
-  // `click` que le navigateur émet à la fin d'un drag (sinon il cocherait
-  // l'article ou refermerait la ligne).
-  const didDrag = useRef(false)
-
-  function closeSwipe() {
-    setOffset(0)
-  }
-
-  function onSwipePointerDown(e: React.PointerEvent) {
-    // Pas de swipe quand un panneau (détails / suppression) est ouvert.
-    if (mode !== null) return
-    pointerActive.current = true
-    dragStartX.current = e.clientX
-    dragStartOffset.current = offset
-    didDrag.current = false
-  }
-
-  function onSwipePointerMove(e: React.PointerEvent) {
-    if (!pointerActive.current) return
-    const dx = e.clientX - dragStartX.current
-    if (!didDrag.current) {
-      if (Math.abs(dx) <= 5) return // sous le seuil : peut-être un simple tap
-      didDrag.current = true
-      setDragging(true)
-      try {
-        e.currentTarget.setPointerCapture(e.pointerId)
-      } catch {
-        // Capture refusée (rare) : le drag marche tant que le pointeur reste là.
-      }
-    }
-    setOffset(Math.max(-SWIPE_REVEAL, Math.min(0, dragStartOffset.current + dx)))
-  }
-
-  function onSwipePointerEnd() {
-    if (!pointerActive.current) return
-    pointerActive.current = false
-    if (!didDrag.current) return // simple tap : rien à snapper
-    setDragging(false)
-    setOffset((o) => (o < -SWIPE_REVEAL / 2 ? -SWIPE_REVEAL : 0))
-  }
+  // Geste mutualisé (cf. useSwipeReveal) : la ligne glisse vers la gauche pour
+  // découvrir le calque d'actions, qui reste accessible au clavier. Désengagé
+  // quand un panneau (détails / suppression) est ouvert.
+  const {
+    offset,
+    setOffset,
+    dragging,
+    didDragRef,
+    close: closeSwipe,
+    swipeHandlers,
+  } = useSwipeReveal({ revealWidth: SWIPE_REVEAL, enabled: mode === null })
 
   return (
     <li
@@ -462,16 +388,13 @@ function ItemRow({
         style={
           mode === null ? { transform: `translateX(${offset}px)` } : undefined
         }
-        onPointerDown={onSwipePointerDown}
-        onPointerMove={onSwipePointerMove}
-        onPointerUp={onSwipePointerEnd}
-        onPointerCancel={onSwipePointerEnd}
+        {...swipeHandlers}
         onClickCapture={(e) => {
           // Click de fin de glissement : on l'avale (pas de cochage parasite).
-          if (didDrag.current) {
+          if (didDragRef.current) {
             e.preventDefault()
             e.stopPropagation()
-            didDrag.current = false
+            didDragRef.current = false
             return
           }
           // Tap sur une ligne déjà ouverte : on referme au lieu de cocher.

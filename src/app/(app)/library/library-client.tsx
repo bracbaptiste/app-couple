@@ -10,6 +10,7 @@ import { RisoCheckbox } from "@/components/ui/riso-checkbox"
 import { cn } from "@/lib/utils"
 import { useRealtimeLibrary } from "@/lib/realtime"
 import { useOfflineCache } from "@/lib/offline/use-offline-cache"
+import { useSwipeReveal } from "@/lib/hooks/useSwipeReveal"
 import { FormFeedback } from "@/app/(auth)/form-ui"
 
 import {
@@ -403,56 +404,17 @@ function LibraryRow({
   const editing = mode === "edit"
 
   // --- Swipe pour révéler les actions (crayon + corbeille) ----------------
-  // Même geste que les tuiles de liste et les tâches (Pointer Events, sans
-  // librairie). La ligne glisse vers la gauche de `offset` (≤ 0) pour découvrir
-  // le calque d'actions ; le calque reste accessible au clavier (boutons
-  // focusables ; recevoir le focus ouvre la ligne, le perdre la referme).
-  const [offset, setOffset] = useState(0)
-  const [dragging, setDragging] = useState(false)
-  const pointerActive = useRef(false)
-  const dragStartX = useRef(0)
-  const dragStartOffset = useRef(0)
-  // Vrai dès que le pointeur a réellement glissé (≥ seuil) : sert à avaler le
-  // `click` que le navigateur émet à la fin d'un drag (sinon il (dé)sélectionnerait
-  // l'article ou ouvrirait l'édition).
-  const didDrag = useRef(false)
-
-  function closeSwipe() {
-    setOffset(0)
-  }
-
-  function onSwipePointerDown(e: React.PointerEvent) {
-    // Pas de swipe quand un panneau (édition / suppression) est ouvert.
-    if (mode !== null) return
-    pointerActive.current = true
-    dragStartX.current = e.clientX
-    dragStartOffset.current = offset
-    didDrag.current = false
-  }
-
-  function onSwipePointerMove(e: React.PointerEvent) {
-    if (!pointerActive.current) return
-    const dx = e.clientX - dragStartX.current
-    if (!didDrag.current) {
-      if (Math.abs(dx) <= 5) return // sous le seuil : peut-être un simple tap
-      didDrag.current = true
-      setDragging(true)
-      try {
-        e.currentTarget.setPointerCapture(e.pointerId)
-      } catch {
-        // Capture refusée (rare) : le drag marche tant que le pointeur reste là.
-      }
-    }
-    setOffset(Math.max(-SWIPE_REVEAL, Math.min(0, dragStartOffset.current + dx)))
-  }
-
-  function onSwipePointerEnd() {
-    if (!pointerActive.current) return
-    pointerActive.current = false
-    if (!didDrag.current) return // simple tap : rien à snapper
-    setDragging(false)
-    setOffset((o) => (o < -SWIPE_REVEAL / 2 ? -SWIPE_REVEAL : 0))
-  }
+  // Geste mutualisé (cf. useSwipeReveal) : la ligne glisse vers la gauche pour
+  // découvrir le calque d'actions, accessible au clavier. Désengagé quand un
+  // panneau (édition / suppression) est ouvert.
+  const {
+    offset,
+    setOffset,
+    dragging,
+    didDragRef,
+    close: closeSwipe,
+    swipeHandlers,
+  } = useSwipeReveal({ revealWidth: SWIPE_REVEAL, enabled: mode === null })
 
   return (
     <li
@@ -514,16 +476,13 @@ function LibraryRow({
         style={
           mode === null ? { transform: `translateX(${offset}px)` } : undefined
         }
-        onPointerDown={onSwipePointerDown}
-        onPointerMove={onSwipePointerMove}
-        onPointerUp={onSwipePointerEnd}
-        onPointerCancel={onSwipePointerEnd}
+        {...swipeHandlers}
         onClickCapture={(e) => {
           // Click de fin de glissement : on l'avale (pas de (dé)sélection parasite).
-          if (didDrag.current) {
+          if (didDragRef.current) {
             e.preventDefault()
             e.stopPropagation()
-            didDrag.current = false
+            didDragRef.current = false
             return
           }
           // Tap sur une ligne déjà ouverte : on referme au lieu d'agir.

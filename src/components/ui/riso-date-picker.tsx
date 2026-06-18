@@ -136,12 +136,15 @@ function RisoDatePicker({
 
   function pick(day: Date) {
     const v = formatValue(day)
-    // La pastille saute aussitôt sur la date tapée…
+    // La pastille saute aussitôt sur la date tapée ET on remonte la valeur tout
+    // de suite : la donnée est ainsi à l'abri même si le composant se démonte
+    // avant la fermeture (ex. « OK » tapé très vite dans un formulaire d'édition).
     setDraft(v)
-    // …puis on remonte la valeur et on ferme, après un court délai de confiance.
+    onChange(v)
+    // Le délai ne sert plus qu'au visuel : on laisse voir la pastille se poser,
+    // puis on ferme. S'il est annulé (démontage), la valeur est déjà remontée.
     if (closeTimer.current) clearTimeout(closeTimer.current)
     closeTimer.current = setTimeout(() => {
-      onChange(v)
       closeTimer.current = null
       setOpen(false)
     }, 180)

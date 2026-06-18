@@ -13,6 +13,7 @@ import { ListLogo } from "@/components/shared/ListLogo"
 import { NewListSheet } from "@/components/lists/NewListSheet"
 import { useRealtimeLists } from "@/lib/realtime"
 import { useOfflineCache } from "@/lib/offline/use-offline-cache"
+import { useSwipeReveal } from "@/lib/hooks/useSwipeReveal"
 import { cn } from "@/lib/utils"
 
 import {
@@ -196,22 +197,24 @@ function ListTile({
   const [deleting, setDeleting] = useState(false)
 
   // --- Swipe pour révéler les actions (crayon + corbeille) ---------------
-  // Geste tactile natif (Pointer Events) : aucune librairie. La carte glisse
-  // vers la gauche de `offset` (≤ 0) pour découvrir le calque d'actions. C'est
-  // un PLUS tactile : le crayon visible reste le chemin clavier / lecteur
-  // d'écran (le calque révélé est aria-hidden, hors tabulation).
-  const [offset, setOffset] = useState(0)
-  const [dragging, setDragging] = useState(false)
-  // Un pointeur est posé sur la carte (pas encore forcément un glissement).
-  const pointerActive = useRef(false)
-  const dragStartX = useRef(0)
-  const dragStartOffset = useRef(0)
-  // Vrai dès que le pointeur a réellement glissé (≥ seuil) : sert à avaler le
-  // `click` que le navigateur émet à la fin d'un drag (sinon il refermerait la
-  // carte ou déclencherait la navigation).
-  const didDrag = useRef(false)
+  // Geste mutualisé (cf. useSwipeReveal) : la carte glisse vers la gauche pour
+  // découvrir le calque d'actions. C'est un PLUS tactile ; le clavier / lecteur
+  // d'écran passe par les boutons focusables du calque. Désengagé en mode
+  // édition / menu ; au premier contact on coupe l'animation d'indice en cours.
   // Minuteurs de l'indice de peek, annulés si l'utilisateur interagit.
   const hintTimers = useRef<ReturnType<typeof setTimeout>[]>([])
+  const {
+    offset,
+    setOffset,
+    dragging,
+    didDragRef,
+    close: closeSwipe,
+    swipeHandlers,
+  } = useSwipeReveal({
+    revealWidth: SWIPE_REVEAL,
+    enabled: mode === null,
+    onEngage: () => hintTimers.current.forEach(clearTimeout),
+  })
 
   // Indice de découvrabilité : la carte glisse brièvement pour révéler l'action
   // brique, puis se referme. Joué une seule fois par appareil (localStorage), et
@@ -234,57 +237,8 @@ function ListTile({
       setTimeout(() => setOffset(0), 1250),
     ]
     return () => hintTimers.current.forEach(clearTimeout)
-  }, [hint])
-
-  function closeSwipe() {
-    setOffset(0)
-  }
-
-  function onSwipePointerDown(e: React.PointerEvent) {
-    // Geste utilisable au doigt, au stylet ET à la souris (cliquer-glisser sur
-    // desktop). On n'engage pas en mode édition/menu.
-    if (mode !== null) return
-    // L'utilisateur prend la main : on coupe l'animation d'indice en cours.
-    hintTimers.current.forEach(clearTimeout)
-    pointerActive.current = true
-    dragStartX.current = e.clientX
-    dragStartOffset.current = offset
-    didDrag.current = false
-    // IMPORTANT : on NE capture PAS le pointeur ici. Capturer dès le pointerdown
-    // retargette le `click` final sur cette div au lieu du lien <a> interne → le
-    // clic simple n'ouvrirait plus la liste. La capture n'arrive qu'au moment où
-    // un vrai glissement démarre (voir onSwipePointerMove).
-  }
-
-  function onSwipePointerMove(e: React.PointerEvent) {
-    if (!pointerActive.current) return
-    const dx = e.clientX - dragStartX.current
-    if (!didDrag.current) {
-      // Tant qu'on n'a pas franchi le seuil, c'est peut-être un simple clic : on
-      // n'engage rien (pas de capture, pas de translation).
-      if (Math.abs(dx) <= 5) return
-      // Vrai glissement : on bascule en mode drag et on capture le pointeur pour
-      // continuer à suivre le doigt même hors de la carte.
-      didDrag.current = true
-      setDragging(true)
-      try {
-        e.currentTarget.setPointerCapture(e.pointerId)
-      } catch {
-        // Capture refusée (rare) : le drag fonctionne quand même tant que le
-        // pointeur reste sur la carte.
-      }
-    }
-    setOffset(Math.max(-SWIPE_REVEAL, Math.min(0, dragStartOffset.current + dx)))
-  }
-
-  function onSwipePointerEnd() {
-    if (!pointerActive.current) return
-    pointerActive.current = false
-    if (!didDrag.current) return // simple clic : rien à snapper, le lien navigue
-    setDragging(false)
-    // Snap : au-delà de la moitié on ouvre franchement, sinon on referme.
-    setOffset((o) => (o < -SWIPE_REVEAL / 2 ? -SWIPE_REVEAL : 0))
-  }
+    // `setOffset` est stable (setter du hook useSwipeReveal).
+  }, [hint, setOffset])
 
   function run(action: () => Promise<ActionResult>) {
     setError(undefined)
@@ -364,17 +318,14 @@ function ListTile({
               : "transition-transform duration-200 ease-out motion-reduce:transition-none",
           )}
           style={{ transform: `translateX(${offset}px)` }}
-          onPointerDown={onSwipePointerDown}
-          onPointerMove={onSwipePointerMove}
-          onPointerUp={onSwipePointerEnd}
-          onPointerCancel={onSwipePointerEnd}
+          {...swipeHandlers}
           onClickCapture={(e) => {
             // Click de fin de glissement : on l'avale (ni navigation ni
             // fermeture) pour que la carte RESTE ouverte sur ses actions.
-            if (didDrag.current) {
+            if (didDragRef.current) {
               e.preventDefault()
               e.stopPropagation()
-              didDrag.current = false
+              didDragRef.current = false
               return
             }
             // Vrai tap sur une carte déjà ouverte : on referme au lieu de naviguer.

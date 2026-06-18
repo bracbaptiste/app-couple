@@ -12,10 +12,11 @@ import { getDueLabel } from "@/lib/hooks/useTaskState"
  * Reprend l'`add-bar` V1 (fond sauge, bordure 2px encre, radius 10, ombre
  * encre), icône `+` à gauche, placeholder « Ajouter une tâche… ».
  *
- * À droite, un mini-bouton calendrier ouvre un sélecteur de date natif
- * (`<input type="date">`, le plus simple en l'absence de DatePicker shadcn).
- * La date choisie s'affiche en badge supprimable. À la création, on envoie le
- * titre + la date (ou rien).
+ * À droite, un mini-bouton calendrier ouvre le `RisoDatePicker` (calendrier
+ * maison aux couleurs de l'appli). La date choisie s'affiche en badge
+ * supprimable. À la création, on envoie le titre + la date (ou rien). Sur
+ * mobile, choisir une date alors qu'un nom est saisi enregistre directement la
+ * tâche (le calendrier étant la dernière étape).
  */
 type AddTaskBarProps = {
   /** Ajoute une tâche, avec une échéance optionnelle. */

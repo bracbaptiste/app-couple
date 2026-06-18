@@ -1,7 +1,7 @@
 "use client"
 
 import { Pencil, Trash2, X } from "lucide-react"
-import { useRef, useState } from "react"
+import { useState } from "react"
 
 import { AddedByMarker } from "@/components/ui/added-by-marker"
 import { RisoButton } from "@/components/ui/riso-button"
@@ -10,6 +10,7 @@ import { RisoDatePicker } from "@/components/ui/riso-date-picker"
 import { RisoInput } from "@/components/ui/riso-input"
 import { cn } from "@/lib/utils"
 import { getDueLabel, getTaskState } from "@/lib/hooks/useTaskState"
+import { useSwipeReveal } from "@/lib/hooks/useSwipeReveal"
 
 import { DueBadge } from "./DueBadge"
 
@@ -108,21 +109,20 @@ function TaskItem({
   const hasActions = canEdit || canDelete
 
   // --- Swipe pour révéler les actions (crayon + corbeille) ----------------
-  // Même geste que les tuiles de liste (Pointer Events, sans librairie). La
-  // ligne glisse vers la gauche de `offset` (≤ 0) pour découvrir le calque.
-  const [offset, setOffset] = useState(0)
-  const [dragging, setDragging] = useState(false)
-  const pointerActive = useRef(false)
-  const dragStartX = useRef(0)
-  const dragStartOffset = useRef(0)
-  // Vrai dès que le pointeur a réellement glissé (≥ seuil) : sert à avaler le
-  // `click` que le navigateur émet à la fin d'un drag (sinon il cocherait la
-  // case ou refermerait la ligne).
-  const didDrag = useRef(false)
-
-  function closeSwipe() {
-    setOffset(0)
-  }
+  // Geste mutualisé (cf. useSwipeReveal) : la ligne glisse vers la gauche pour
+  // découvrir le calque. Désengagé en mode édition / confirmation, ou s'il n'y
+  // a aucune action.
+  const {
+    offset,
+    setOffset,
+    dragging,
+    didDragRef,
+    close: closeSwipe,
+    swipeHandlers,
+  } = useSwipeReveal({
+    revealWidth: SWIPE_REVEAL,
+    enabled: mode === null && hasActions,
+  })
 
   function openEdit() {
     closeSwipe()
@@ -142,42 +142,6 @@ function TaskItem({
       dueDate: editDue || null,
     })
     setMode(null)
-  }
-
-  function onSwipePointerDown(e: React.PointerEvent) {
-    // Pas de swipe en mode édition / confirmation, ni s'il n'y a aucune action.
-    if (mode !== null || !hasActions) return
-    pointerActive.current = true
-    dragStartX.current = e.clientX
-    dragStartOffset.current = offset
-    didDrag.current = false
-    // On NE capture PAS ici : la capture n'arrive qu'au démarrage d'un vrai
-    // glissement (voir onSwipePointerMove), pour ne pas voler les taps (case).
-  }
-
-  function onSwipePointerMove(e: React.PointerEvent) {
-    if (!pointerActive.current) return
-    const dx = e.clientX - dragStartX.current
-    if (!didDrag.current) {
-      if (Math.abs(dx) <= 5) return // sous le seuil : peut-être un simple tap
-      didDrag.current = true
-      setDragging(true)
-      try {
-        e.currentTarget.setPointerCapture(e.pointerId)
-      } catch {
-        // Capture refusée (rare) : le drag marche tant que le pointeur reste là.
-      }
-    }
-    setOffset(Math.max(-SWIPE_REVEAL, Math.min(0, dragStartOffset.current + dx)))
-  }
-
-  function onSwipePointerEnd() {
-    if (!pointerActive.current) return
-    pointerActive.current = false
-    if (!didDrag.current) return // simple tap : rien à snapper
-    setDragging(false)
-    // Snap : au-delà de la moitié on ouvre franchement, sinon on referme.
-    setOffset((o) => (o < -SWIPE_REVEAL / 2 ? -SWIPE_REVEAL : 0))
   }
 
   return (
@@ -239,16 +203,13 @@ function TaskItem({
         style={
           mode === null ? { transform: `translateX(${offset}px)` } : undefined
         }
-        onPointerDown={onSwipePointerDown}
-        onPointerMove={onSwipePointerMove}
-        onPointerUp={onSwipePointerEnd}
-        onPointerCancel={onSwipePointerEnd}
+        {...swipeHandlers}
         onClickCapture={(e) => {
           // Click de fin de glissement : on l'avale (pas de cochage parasite).
-          if (didDrag.current) {
+          if (didDragRef.current) {
             e.preventDefault()
             e.stopPropagation()
-            didDrag.current = false
+            didDragRef.current = false
             return
           }
           // Tap sur une ligne déjà ouverte : on referme au lieu de cocher.

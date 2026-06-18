@@ -2,14 +2,7 @@
 
 import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
-import {
-  useEffect,
-  useMemo,
-  useOptimistic,
-  useRef,
-  useState,
-  useTransition,
-} from "react"
+import { useMemo, useState } from "react"
 
 import { AddTaskBar } from "./AddTaskBar"
 import { DonePanel } from "./DonePanel"
@@ -17,7 +10,7 @@ import { TaskItem } from "./TaskItem"
 import { useRealtimeTasks } from "@/lib/realtime"
 import { runMutation } from "@/lib/offline/mutation-queue"
 import { useOfflineCache } from "@/lib/offline/use-offline-cache"
-import { useOnlineStatus } from "@/lib/offline/use-online-status"
+import { useOfflineOptimistic } from "@/lib/offline/use-offline-optimistic"
 import { sortPendingTasks } from "@/lib/utils/sortTasks"
 
 type Color = "sauge" | "brique"
@@ -141,8 +134,6 @@ export function TodoListView({
   // ligne). Fondation pour la consultation hors ligne (cf. use-offline-cache.ts).
   useOfflineCache(`tasks:${listId}`, { tasks, doneTasks, members })
 
-  const online = useOnlineStatus()
-
   // Index prénom/couleur par id de profil, pour le marqueur « ajouté par ».
   const membersById = useMemo(() => {
     const map = new Map<string, TodoMemberView>()
@@ -154,42 +145,17 @@ export function TodoListView({
   // d'une section à l'autre par simple bascule de `isDone`).
   const combined = useMemo(() => [...tasks, ...doneTasks], [tasks, doneTasks])
 
-  // État optimiste : réapplique la valeur optimiste tant que la transition est
-  // en cours, puis revient à `combined` (donnée serveur) :
-  //   - succès en ligne → `revalidatePath` a déjà mis les props à jour ;
-  //   - échec           → `combined` inchangé : rollback visuel automatique.
-  const [optimisticTasks, applyOptimistic] = useOptimistic(
-    combined,
-    applyTaskAction,
-  )
-  const [isPending, startAction] = useTransition()
+  // Affichage optimiste + résilience hors ligne, mutualisés (cf.
+  // useOfflineOptimistic) : `displayTasks` = état serveur + optimiste en vol +
+  // patches hors ligne persistants ; `apply` applique une action (et la
+  // mémorise si l'on est hors ligne).
+  const {
+    display: displayTasks,
+    isPending,
+    startAction,
+    apply,
+  } = useOfflineOptimistic(combined, applyTaskAction)
   const [error, setError] = useState<string | undefined>()
-
-  // Overlay HORS LIGNE : `useOptimistic` annule sa valeur dès la fin de la
-  // transition, or hors ligne le serveur ne revalide rien → sans overlay, la
-  // case cochée (ou la tâche ajoutée / supprimée) « rebondirait ». On accumule
-  // donc les actions faites sans réseau ici (elles persistent). Au retour du
-  // réseau, le rejeu de la file + `router.refresh()` (OfflineIndicator) ramène
-  // la vérité serveur : on vide alors l'overlay.
-  const [offlinePatches, setOfflinePatches] = useState<OptimisticAction[]>([])
-  const wasOnline = useRef(true)
-  useEffect(() => {
-    if (online && !wasOnline.current) setOfflinePatches([])
-    wasOnline.current = online
-  }, [online])
-
-  // Affichage = état serveur + optimiste en vol + patches hors ligne persistants.
-  const displayTasks = useMemo(
-    () => offlinePatches.reduce(applyTaskAction, optimisticTasks),
-    [optimisticTasks, offlinePatches],
-  )
-
-  /** Mémorise une action si elle est faite hors ligne (sinon no-op). */
-  function rememberIfOffline(action: OptimisticAction) {
-    if (typeof navigator !== "undefined" && navigator.onLine === false) {
-      setOfflinePatches((prev) => [...prev, action])
-    }
-  }
 
   function handleAdd(title: string, dueDate?: Date) {
     setError(undefined)
@@ -206,8 +172,7 @@ export function TodoListView({
     }
     const action: OptimisticAction = { kind: "add", task: optimisticTask }
     startAction(async () => {
-      applyOptimistic(action)
-      rememberIfOffline(action)
+      apply(action)
       const result = await runMutation("addTask", {
         listId,
         rawTitle: title,
@@ -221,8 +186,7 @@ export function TodoListView({
     setError(undefined)
     const action: OptimisticAction = { kind: "toggle", id: taskId, done: next }
     startAction(async () => {
-      applyOptimistic(action)
-      rememberIfOffline(action)
+      apply(action)
       const result = await runMutation("toggleTask", {
         listId,
         taskId,
@@ -245,8 +209,7 @@ export function TodoListView({
       dueDate: patch.dueDate,
     }
     startAction(async () => {
-      applyOptimistic(action)
-      rememberIfOffline(action)
+      apply(action)
       const result = await runMutation("editTask", {
         listId,
         taskId,
@@ -262,8 +225,7 @@ export function TodoListView({
     setError(undefined)
     const action: OptimisticAction = { kind: "delete", id: taskId }
     startAction(async () => {
-      applyOptimistic(action)
-      rememberIfOffline(action)
+      apply(action)
       const result = await runMutation("deleteTask", { listId, taskId })
       if (!result.ok) setError(result.error)
     })
@@ -315,22 +277,31 @@ export function TodoListView({
           <>
             {pending.length > 0 && (
               <ul className="flex flex-col gap-2">
-                {pending.map((task) => (
-                  <TaskItem
-                    key={task.id}
-                    id={task.id}
-                    title={task.title}
-                    note={task.note}
-                    dueDate={task.dueDate}
-                    isDone={task.isDone}
-                    member={
-                      task.addedBy ? membersById.get(task.addedBy) ?? null : null
-                    }
-                    onToggle={handleToggle}
-                    onEdit={handleEdit}
-                    onDelete={handleDelete}
-                  />
-                ))}
+                {pending.map((task) => {
+                  // Une tâche encore en id temporaire (`tmp_…`) n'est pas
+                  // persistée : modifier / supprimer viserait une ligne serveur
+                  // inexistante (no-op silencieux). On masque ces actions tant
+                  // que la vraie ligne n'est pas revenue du serveur.
+                  const synced = !task.id.startsWith("tmp_")
+                  return (
+                    <TaskItem
+                      key={task.id}
+                      id={task.id}
+                      title={task.title}
+                      note={task.note}
+                      dueDate={task.dueDate}
+                      isDone={task.isDone}
+                      member={
+                        task.addedBy
+                          ? membersById.get(task.addedBy) ?? null
+                          : null
+                      }
+                      onToggle={handleToggle}
+                      onEdit={synced ? handleEdit : undefined}
+                      onDelete={synced ? handleDelete : undefined}
+                    />
+                  )
+                })}
               </ul>
             )}
 
