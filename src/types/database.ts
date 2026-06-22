@@ -46,6 +46,24 @@ export type Database = {
           },
         ]
       }
+      couple_join_attempts: {
+        Row: {
+          attempts: number
+          user_id: string
+          window_started_at: string
+        }
+        Insert: {
+          attempts?: number
+          user_id: string
+          window_started_at?: string
+        }
+        Update: {
+          attempts?: number
+          user_id?: string
+          window_started_at?: string
+        }
+        Relationships: []
+      }
       couples: {
         Row: {
           created_at: string
@@ -86,6 +104,7 @@ export type Database = {
           id: string
           last_used_at: string
           name: string
+          nom_normalise: string
           usage_count: number
         }
         Insert: {
@@ -95,6 +114,7 @@ export type Database = {
           id?: string
           last_used_at?: string
           name: string
+          nom_normalise?: string
           usage_count?: number
         }
         Update: {
@@ -104,6 +124,7 @@ export type Database = {
           id?: string
           last_used_at?: string
           name?: string
+          nom_normalise?: string
           usage_count?: number
         }
         Relationships: [
@@ -134,6 +155,7 @@ export type Database = {
           library_item_id: string
           list_id: string
           note: string | null
+          quantities: Json | null
           quantity: string | null
         }
         Insert: {
@@ -146,6 +168,7 @@ export type Database = {
           library_item_id: string
           list_id: string
           note?: string | null
+          quantities?: Json | null
           quantity?: string | null
         }
         Update: {
@@ -158,6 +181,7 @@ export type Database = {
           library_item_id?: string
           list_id?: string
           note?: string | null
+          quantities?: Json | null
           quantity?: string | null
         }
         Relationships: [
@@ -281,6 +305,119 @@ export type Database = {
           },
         ]
       }
+      recipe_ingredients: {
+        Row: {
+          id: string
+          nom_affiche: string
+          nom_normalise: string
+          ordre: number
+          quantite: number | null
+          recipe_id: string
+          unite: string | null
+        }
+        Insert: {
+          id?: string
+          nom_affiche: string
+          nom_normalise: string
+          ordre?: number
+          quantite?: number | null
+          recipe_id: string
+          unite?: string | null
+        }
+        Update: {
+          id?: string
+          nom_affiche?: string
+          nom_normalise?: string
+          ordre?: number
+          quantite?: number | null
+          recipe_id?: string
+          unite?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recipe_ingredients_recipe_id_fkey"
+            columns: ["recipe_id"]
+            isOneToOne: false
+            referencedRelation: "recipes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      recipes: {
+        Row: {
+          calories_par_portion: number | null
+          couple_id: string
+          created_at: string
+          created_by: string | null
+          duree_minutes: number | null
+          etapes: Json
+          glucides_g: number | null
+          id: string
+          lipides_g: number | null
+          nombre_personnes: number
+          notes: string | null
+          photo_url: string | null
+          proteines_g: number | null
+          source: string
+          tags: string[]
+          titre: string
+          type_plat: string
+        }
+        Insert: {
+          calories_par_portion?: number | null
+          couple_id: string
+          created_at?: string
+          created_by?: string | null
+          duree_minutes?: number | null
+          etapes?: Json
+          glucides_g?: number | null
+          id?: string
+          lipides_g?: number | null
+          nombre_personnes?: number
+          notes?: string | null
+          photo_url?: string | null
+          proteines_g?: number | null
+          source: string
+          tags?: string[]
+          titre: string
+          type_plat: string
+        }
+        Update: {
+          calories_par_portion?: number | null
+          couple_id?: string
+          created_at?: string
+          created_by?: string | null
+          duree_minutes?: number | null
+          etapes?: Json
+          glucides_g?: number | null
+          id?: string
+          lipides_g?: number | null
+          nombre_personnes?: number
+          notes?: string | null
+          photo_url?: string | null
+          proteines_g?: number | null
+          source?: string
+          tags?: string[]
+          titre?: string
+          type_plat?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recipes_couple_id_fkey"
+            columns: ["couple_id"]
+            isOneToOne: false
+            referencedRelation: "couples"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "recipes_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tasks: {
         Row: {
           added_by: string | null
@@ -350,17 +487,33 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      create_couple: {
+        Args: { p_color: string; p_display_name: string }
+        Returns: Json
+      }
       create_default_categories: {
         Args: { p_couple_id: string }
         Returns: undefined
       }
       current_couple_id: { Args: never; Returns: string }
+      delete_category_with_replacement: {
+        Args: { p_category_id: string; p_replacement_id?: string }
+        Returns: Json
+      }
       generate_invite_code: { Args: never; Returns: string }
+      increment_library_usage: {
+        Args: { p_item_id: string }
+        Returns: undefined
+      }
       join_couple: {
         Args: { p_code: string; p_display_name: string }
-        Returns: string
+        Returns: Json
       }
-      join_couple_with_code: { Args: { p_code: string }; Returns: string }
+      move_category: {
+        Args: { p_category_id: string; p_direction: string }
+        Returns: boolean
+      }
+      normaliser_nom: { Args: { raw: string }; Returns: string }
     }
     Enums: {
       [_ in never]: never
