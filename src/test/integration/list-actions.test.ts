@@ -21,7 +21,9 @@ vi.mock("@/lib/supabase/server", () => ({
 
 // Importé après les mocks (les actions résolvent createClient à l'exécution).
 import { addItemToList, toggleItem } from "@/app/(app)/lists/[listId]/actions"
+import { addTask } from "@/app/(app)/lists/[listId]/task-actions"
 import { sendToList } from "@/app/(app)/library/actions"
+import { createCouple, joinCouple } from "@/app/onboarding/actions"
 
 /** Filtre l'historique des requêtes sur (table, opération). */
 function callsFor(op: QueryContext["op"], table: string) {
@@ -41,7 +43,7 @@ describe("addItemToList — ajout d'un article", () => {
     supa = createSupabaseMock({
       handler: (ctx) => {
         if (ctx.table === "profiles") return { data: { couple_id: "couple-1" } }
-        if (ctx.table === "lists") return { data: { id: "list-1" } }
+        if (ctx.table === "lists") return { data: { id: "list-1", kind: "courses" } }
         // Produit inconnu de la bibliothèque.
         if (ctx.table === "library_items" && ctx.op === "select") return { data: null }
         // Rayon deviné résolu vers un id réel du couple.
@@ -80,7 +82,7 @@ describe("addItemToList — ajout d'un article", () => {
     supa = createSupabaseMock({
       handler: (ctx) => {
         if (ctx.table === "profiles") return { data: { couple_id: "couple-1" } }
-        if (ctx.table === "lists") return { data: { id: "list-1" } }
+        if (ctx.table === "lists") return { data: { id: "list-1", kind: "courses" } }
         if (ctx.table === "library_items" && ctx.op === "select")
           return { data: { id: "lib-9", usage_count: 3 } }
         if (ctx.table === "list_items" && ctx.op === "select") return { data: null }
@@ -95,9 +97,9 @@ describe("addItemToList — ajout d'un article", () => {
     // Aucun nouveau produit créé.
     expect(callsFor("insert", "library_items")).toHaveLength(0)
     // usage_count incrémenté (3 → 4).
-    const libUpdate = callsFor("update", "library_items")
-    expect(libUpdate).toHaveLength(1)
-    expect(libUpdate[0].payload).toMatchObject({ usage_count: 4 })
+    const usageRpc = callsFor("rpc", "increment_library_usage")
+    expect(usageRpc).toHaveLength(1)
+    expect(usageRpc[0].payload).toMatchObject({ p_item_id: "lib-9" })
     // L'article rejoint quand même la liste.
     expect(callsFor("insert", "list_items")).toHaveLength(1)
   })
@@ -106,7 +108,7 @@ describe("addItemToList — ajout d'un article", () => {
     supa = createSupabaseMock({
       handler: (ctx) => {
         if (ctx.table === "profiles") return { data: { couple_id: "couple-1" } }
-        if (ctx.table === "lists") return { data: { id: "list-1" } }
+        if (ctx.table === "lists") return { data: { id: "list-1", kind: "courses" } }
         if (ctx.table === "library_items" && ctx.op === "select")
           return { data: { id: "lib-9", usage_count: 1 } }
         // Déjà présent et non coché.
@@ -156,7 +158,7 @@ describe("toggleItem — cochage / décochage", () => {
     supa = createSupabaseMock({
       handler: (ctx) => {
         if (ctx.table === "profiles") return { data: { couple_id: "couple-1" } }
-        if (ctx.table === "lists") return { data: { id: "list-1" } }
+        if (ctx.table === "lists") return { data: { id: "list-1", kind: "courses" } }
         if (ctx.table === "list_items") return { error: null }
         return { data: null }
       },
@@ -179,7 +181,7 @@ describe("toggleItem — cochage / décochage", () => {
     supa = createSupabaseMock({
       handler: (ctx) => {
         if (ctx.table === "profiles") return { data: { couple_id: "couple-1" } }
-        if (ctx.table === "lists") return { data: { id: "list-1" } }
+        if (ctx.table === "lists") return { data: { id: "list-1", kind: "courses" } }
         if (ctx.table === "list_items") return { error: null }
         return { data: null }
       },
@@ -206,10 +208,10 @@ describe("sendToList — bibliothèque → liste", () => {
         if (ctx.table === "profiles") return { data: { couple_id: "couple-1" } }
         if (ctx.table === "library_items" && ctx.op === "select")
           return { data: { id: "lib-1", usage_count: 5 } }
-        if (ctx.table === "lists") return { data: { id: "list-1" } }
+        if (ctx.table === "lists") return { data: { id: "list-1", kind: "courses" } }
         if (ctx.table === "list_items" && ctx.op === "select") return { data: null }
         if (ctx.table === "list_items" && ctx.op === "insert") return { error: null }
-        if (ctx.table === "library_items" && ctx.op === "update") return { error: null }
+        if (ctx.table === "increment_library_usage") return { error: null }
         return { data: null }
       },
     })
@@ -225,9 +227,9 @@ describe("sendToList — bibliothèque → liste", () => {
       added_by: "user-1",
     })
     // Fréquence renforcée (5 → 6).
-    const libUpdate = callsFor("update", "library_items")
-    expect(libUpdate).toHaveLength(1)
-    expect(libUpdate[0].payload).toMatchObject({ usage_count: 6 })
+    const usageRpc = callsFor("rpc", "increment_library_usage")
+    expect(usageRpc).toHaveLength(1)
+    expect(usageRpc[0].payload).toMatchObject({ p_item_id: "lib-1" })
   })
 
   it("ne duplique pas mais renforce quand même la fréquence (article déjà présent)", async () => {
@@ -236,10 +238,10 @@ describe("sendToList — bibliothèque → liste", () => {
         if (ctx.table === "profiles") return { data: { couple_id: "couple-1" } }
         if (ctx.table === "library_items" && ctx.op === "select")
           return { data: { id: "lib-1", usage_count: 5 } }
-        if (ctx.table === "lists") return { data: { id: "list-1" } }
+        if (ctx.table === "lists") return { data: { id: "list-1", kind: "courses" } }
         if (ctx.table === "list_items" && ctx.op === "select")
           return { data: { id: "li-existing" } }
-        if (ctx.table === "library_items" && ctx.op === "update") return { error: null }
+        if (ctx.table === "increment_library_usage") return { error: null }
         return { data: null }
       },
     })
@@ -249,7 +251,7 @@ describe("sendToList — bibliothèque → liste", () => {
     expect(result).toEqual({ ok: true })
     expect(callsFor("insert", "list_items")).toHaveLength(0)
     // L'envoi reste un signal d'usage même en cas de doublon.
-    expect(callsFor("update", "library_items")).toHaveLength(1)
+    expect(callsFor("rpc", "increment_library_usage")).toHaveLength(1)
   })
 
   it("refuse un produit introuvable dans le couple", async () => {
@@ -265,5 +267,108 @@ describe("sendToList — bibliothèque → liste", () => {
 
     expect(result).toEqual({ ok: false, error: "Article introuvable." })
     expect(callsFor("insert", "list_items")).toHaveLength(0)
+  })
+
+  it("refuse d'envoyer un article vers une liste to-do", async () => {
+    supa = createSupabaseMock({
+      handler: (ctx) => {
+        if (ctx.table === "profiles") return { data: { couple_id: "couple-1" } }
+        if (ctx.table === "library_items") {
+          return { data: { id: "lib-1", usage_count: 1 } }
+        }
+        if (ctx.table === "lists") {
+          return { data: { id: "todo-1", kind: "todo" } }
+        }
+        return { data: null }
+      },
+    })
+
+    const result = await sendToList("lib-1", "todo-1")
+
+    expect(result).toEqual({ ok: false, error: "Choisis une liste de courses." })
+    expect(callsFor("insert", "list_items")).toHaveLength(0)
+  })
+})
+
+describe("addTask — création idempotente hors ligne", () => {
+  it("conserve l'UUID fourni par le client", async () => {
+    supa = createSupabaseMock({
+      handler: (ctx) => {
+        if (ctx.table === "profiles") return { data: { couple_id: "couple-1" } }
+        if (ctx.table === "lists") return { data: { id: "todo-1", kind: "todo" } }
+        if (ctx.table === "tasks") return { error: null }
+        return { data: null }
+      },
+    })
+
+    const result = await addTask({
+      taskId: "11111111-1111-4111-8111-111111111111",
+      listId: "todo-1",
+      rawTitle: "Appeler le plombier",
+    })
+
+    expect(result).toEqual({ ok: true })
+    expect(callsFor("insert", "tasks")[0].payload).toMatchObject({
+      id: "11111111-1111-4111-8111-111111111111",
+      list_id: "todo-1",
+    })
+  })
+
+  it("considère un UUID déjà inséré comme un rejeu réussi", async () => {
+    supa = createSupabaseMock({
+      handler: (ctx) => {
+        if (ctx.table === "profiles") return { data: { couple_id: "couple-1" } }
+        if (ctx.table === "lists") return { data: { id: "todo-1", kind: "todo" } }
+        if (ctx.table === "tasks") return { error: { code: "23505" } }
+        return { data: null }
+      },
+    })
+
+    const result = await addTask({
+      taskId: "11111111-1111-4111-8111-111111111111",
+      listId: "todo-1",
+      rawTitle: "Appeler le plombier",
+    })
+
+    expect(result).toEqual({ ok: true })
+  })
+})
+
+describe("onboarding — RPC atomiques", () => {
+  it("crée le couple en une seule transaction RPC", async () => {
+    supa = createSupabaseMock({
+      handler: (ctx) =>
+        ctx.table === "create_couple"
+          ? { data: { ok: true, invite_code: "123456" }, error: null }
+          : { data: null },
+    })
+    const form = new FormData()
+    form.set("display_name", "Camille")
+    form.set("color", "sauge")
+
+    const result = await createCouple({}, form)
+
+    expect(result).toEqual({ inviteCode: "123456" })
+    expect(callsFor("rpc", "create_couple")).toHaveLength(1)
+    expect(callsFor("insert", "couples")).toHaveLength(0)
+  })
+
+  it("traduit la limitation des tentatives de code", async () => {
+    supa = createSupabaseMock({
+      handler: (ctx) => {
+        if (ctx.table === "profiles") return { data: { couple_id: null } }
+        if (ctx.table === "join_couple") {
+          return { data: { ok: false, code: "RATE_LIMITED" }, error: null }
+        }
+        return { data: null }
+      },
+    })
+    const form = new FormData()
+    form.set("display_name", "Camille")
+    form.set("invite_code", "123456")
+
+    const result = await joinCouple({}, form)
+
+    expect(result.error).toContain("15 minutes")
   })
 })

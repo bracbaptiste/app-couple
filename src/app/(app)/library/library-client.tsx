@@ -114,7 +114,7 @@ export function LibraryBrowser({
   useRealtimeLibrary(coupleId)
 
   // Cache de lecture (fondation hors ligne) : dernière vue connue de la biblio.
-  useOfflineCache("library", { groups, lists, total })
+  useOfflineCache(`${coupleId}:library`, { groups, lists, total })
 
   const [query, setQuery] = useState("")
   // Produits cochés pour l'export groupé (par id, survit au filtrage).

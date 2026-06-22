@@ -32,7 +32,7 @@ export function ListLogo({
 }) {
   const text = label(variant, ownerName)
   return (
-    <img
+    <Image
       src={SRC[variant]}
       alt={text}
       title={text}
@@ -43,3 +43,4 @@ export function ListLogo({
     />
   )
 }
+import Image from "next/image"

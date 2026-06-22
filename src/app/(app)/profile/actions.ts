@@ -164,40 +164,13 @@ export async function moveCategory(
   categoryId: string,
   direction: "up" | "down",
 ): Promise<ActionResult> {
-  const { supabase, coupleId } = await requireMembership()
+  const { supabase } = await requireMembership()
+  const { data, error } = await supabase.rpc("move_category", {
+    p_category_id: categoryId,
+    p_direction: direction,
+  })
 
-  const { data: cats } = await supabase
-    .from("categories")
-    .select("id, position")
-    .eq("couple_id", coupleId)
-    .order("position", { ascending: true })
-
-  if (!cats || cats.length < 2) return { ok: true }
-
-  const index = cats.findIndex((c) => c.id === categoryId)
-  if (index === -1) return { ok: false, error: "Rayon introuvable." }
-
-  const swapIndex = direction === "up" ? index - 1 : index + 1
-  if (swapIndex < 0 || swapIndex >= cats.length) return { ok: true } // déjà au bord
-
-  const current = cats[index]
-  const neighbor = cats[swapIndex]
-
-  // Échange des positions (deux écritures, toutes deux filtrées par couple_id).
-  const [a, b] = await Promise.all([
-    supabase
-      .from("categories")
-      .update({ position: neighbor.position })
-      .eq("id", current.id)
-      .eq("couple_id", coupleId),
-    supabase
-      .from("categories")
-      .update({ position: current.position })
-      .eq("id", neighbor.id)
-      .eq("couple_id", coupleId),
-  ])
-
-  if (a.error || b.error) {
+  if (error || data !== true) {
     return { ok: false, error: "Impossible de réordonner. Réessaie." }
   }
 
@@ -216,65 +189,32 @@ export async function deleteCategory(
   categoryId: string,
   replacementId: string | null,
 ): Promise<ActionResult> {
-  const { supabase, coupleId } = await requireMembership()
+  const { supabase } = await requireMembership()
+  const { data, error } = await supabase.rpc(
+    "delete_category_with_replacement",
+    {
+      p_category_id: categoryId,
+      p_replacement_id: replacementId,
+    },
+  )
 
-  // Compte les produits rattachés (source de vérité côté serveur).
-  const { count, error: countError } = await supabase
-    .from("library_items")
-    .select("id", { count: "exact", head: true })
-    .eq("couple_id", coupleId)
-    .eq("category_id", categoryId)
-
-  if (countError) {
-    return { ok: false, error: "Vérification impossible. Réessaie." }
+  if (error || !data || typeof data !== "object") {
+    return { ok: false, error: "Suppression impossible. Réessaie." }
   }
 
-  const usedCount = count ?? 0
-
-  if (usedCount > 0) {
-    if (!replacementId) {
+  const result = data as { ok?: boolean; code?: string; count?: number }
+  if (!result.ok) {
+    if (result.code === "REPLACEMENT_REQUIRED") {
+      const count = result.count ?? 0
       return {
         ok: false,
-        error: `Ce rayon contient ${usedCount} produit${
-          usedCount > 1 ? "s" : ""
-        }. Choisis un rayon de remplacement avant de le supprimer.`,
+        error: `Ce rayon contient ${count} produit${count > 1 ? "s" : ""}. Choisis un rayon de remplacement avant de le supprimer.`,
       }
     }
-    if (replacementId === categoryId) {
-      return { ok: false, error: "Choisis un autre rayon de remplacement." }
-    }
-
-    // Le remplacement doit appartenir au même couple.
-    const { data: replacement } = await supabase
-      .from("categories")
-      .select("id")
-      .eq("id", replacementId)
-      .eq("couple_id", coupleId)
-      .maybeSingle()
-
-    if (!replacement) {
+    if (result.code === "INVALID_REPLACEMENT") {
       return { ok: false, error: "Rayon de remplacement invalide." }
     }
-
-    const { error: reassignError } = await supabase
-      .from("library_items")
-      .update({ category_id: replacementId })
-      .eq("couple_id", coupleId)
-      .eq("category_id", categoryId)
-
-    if (reassignError) {
-      return { ok: false, error: "Réaffectation impossible. Réessaie." }
-    }
-  }
-
-  const { error: deleteError } = await supabase
-    .from("categories")
-    .delete()
-    .eq("id", categoryId)
-    .eq("couple_id", coupleId)
-
-  if (deleteError) {
-    return { ok: false, error: "Suppression impossible. Réessaie." }
+    return { ok: false, error: "Rayon introuvable." }
   }
 
   revalidatePath("/profile/categories")

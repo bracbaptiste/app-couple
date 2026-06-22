@@ -26,12 +26,14 @@ export default async function PurchaseHistoryPage() {
   // La RLS sur `list_items` (via la liste parente) restreint déjà aux listes
   // accessibles : pas de filtre couple_id explicite ici. `list_items` n'existe
   // que pour les listes de courses, donc pas de filtre `kind` non plus.
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("list_items")
     .select("id, checked_at, library_items(name), lists(name)")
     .eq("is_checked", true)
     .order("checked_at", { ascending: false })
     .limit(50)
+
+  if (error) throw new Error("Impossible de charger l'historique des achats")
 
   const entries: HistoryEntry[] = (data ?? [])
     // Garde-fou : on ne garde que les achats horodatés (tri / regroupement sûrs).

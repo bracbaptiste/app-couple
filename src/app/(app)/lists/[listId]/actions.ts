@@ -59,18 +59,18 @@ async function requireMembership(): Promise<{
  * Toutes les mutations d'articles passent par là avant d'écrire (double la RLS
  * et borne les `list_id` reçus du client).
  */
-async function assertListOwned(
+async function assertCoursesListOwned(
   supabase: ServerClient,
   listId: string,
   coupleId: string,
 ): Promise<boolean> {
   const { data } = await supabase
     .from("lists")
-    .select("id")
+    .select("id, kind")
     .eq("id", listId)
     .eq("couple_id", coupleId)
     .maybeSingle()
-  return Boolean(data)
+  return data?.kind === "courses"
 }
 
 /* -------------------------------------------------------------------------- */
@@ -115,7 +115,7 @@ export async function addItemToList(input: AddItemInput): Promise<ActionResult> 
 
   const { supabase, userId, coupleId } = await requireMembership()
 
-  if (!(await assertListOwned(supabase, listId, coupleId))) {
+  if (!(await assertCoursesListOwned(supabase, listId, coupleId))) {
     return { ok: false, error: "Liste introuvable." }
   }
 
@@ -131,13 +131,7 @@ export async function addItemToList(input: AddItemInput): Promise<ActionResult> 
 
   if (existing) {
     libraryItemId = existing.id
-    await supabase
-      .from("library_items")
-      .update({
-        usage_count: existing.usage_count + 1,
-        last_used_at: new Date().toISOString(),
-      })
-      .eq("id", existing.id)
+    await supabase.rpc("increment_library_usage", { p_item_id: existing.id })
   } else {
     // Nouveau produit : on devine son rayon et on le range si ce rayon existe
     // chez le couple (sinon `null` = « Sans rayon »).
@@ -149,7 +143,12 @@ export async function addItemToList(input: AddItemInput): Promise<ActionResult> 
 
     const { data: created, error } = await supabase
       .from("library_items")
-      .insert({ couple_id: coupleId, name, category_id: categoryId })
+      .insert({
+        couple_id: coupleId,
+        name,
+        category_id: categoryId,
+        usage_count: 1,
+      })
       .select("id")
       .single()
 
@@ -220,7 +219,7 @@ export async function toggleItem(
 ): Promise<ActionResult> {
   const { supabase, userId, coupleId } = await requireMembership()
 
-  if (!(await assertListOwned(supabase, listId, coupleId))) {
+  if (!(await assertCoursesListOwned(supabase, listId, coupleId))) {
     return { ok: false, error: "Liste introuvable." }
   }
 
@@ -258,7 +257,7 @@ export async function updateItemDetails(
 
   const { supabase, coupleId } = await requireMembership()
 
-  if (!(await assertListOwned(supabase, listId, coupleId))) {
+  if (!(await assertCoursesListOwned(supabase, listId, coupleId))) {
     return { ok: false, error: "Liste introuvable." }
   }
 
@@ -287,7 +286,7 @@ export async function deleteItem(
 ): Promise<ActionResult> {
   const { supabase, coupleId } = await requireMembership()
 
-  if (!(await assertListOwned(supabase, listId, coupleId))) {
+  if (!(await assertCoursesListOwned(supabase, listId, coupleId))) {
     return { ok: false, error: "Liste introuvable." }
   }
 

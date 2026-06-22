@@ -10,6 +10,7 @@ import { RisoInput } from "@/components/ui/riso-input"
 import { cn } from "@/lib/utils"
 import { Field, FormFeedback, SubmitButton } from "@/app/(auth)/form-ui"
 import { signOut } from "@/app/(auth)/actions"
+import { clearOfflineData } from "@/lib/offline/db"
 
 import { leaveCouple, updateProfile, type ActionResult } from "./actions"
 
@@ -156,11 +157,17 @@ export function DangerZone() {
   function leave() {
     setError(undefined)
     startTransition(async () => {
+      await clearOfflineData()
       // Succès → la Server Action redirige (pas de retour). On ne gère ici
       // qu'un éventuel échec renvoyé sans redirection.
       const result = await leaveCouple()
       if (result && !result.ok) setError(result.error)
     })
+  }
+
+  async function signOutAndClear() {
+    await clearOfflineData()
+    await signOut()
   }
 
   return (
@@ -169,7 +176,7 @@ export function DangerZone() {
 
       <div className="flex flex-col gap-3">
         {/* Déconnexion : Server Action via <form> (progressive enhancement). */}
-        <form action={signOut} className="contents">
+        <form action={signOutAndClear} className="contents">
           <RisoButton
             type="submit"
             variant="secondary"

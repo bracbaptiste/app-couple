@@ -11,6 +11,9 @@ export const AUTH_PATHS = ["/login", "/signup", "/forgot-password"] as const
  */
 export const DEV_PUBLIC_PATHS = ["/design-test"] as const
 
+/** Flux techniques publics qui ne doivent pas rediriger une session active. */
+export const FLOW_PUBLIC_PATHS = ["/auth/callback", "/reset-password"] as const
+
 /** Destination d'un utilisateur connecté qui n'a pas encore de couple. */
 export const ONBOARDING_PATH = "/onboarding"
 
@@ -26,6 +29,9 @@ export function isAuthPath(pathname: string): boolean {
 export function isPublicPath(pathname: string): boolean {
   return (
     isAuthPath(pathname) ||
+    FLOW_PUBLIC_PATHS.some(
+      (p) => pathname === p || pathname.startsWith(`${p}/`),
+    ) ||
     DEV_PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))
   )
 }
@@ -43,11 +49,12 @@ export async function resolveLandingPath(
   supabase: SupabaseClient<Database>,
   userId: string,
 ): Promise<string> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("profiles")
     .select("couple_id")
     .eq("id", userId)
     .maybeSingle()
 
+  if (error) throw new Error("Impossible de déterminer la destination utilisateur")
   return data?.couple_id ? LISTS_PATH : ONBOARDING_PATH
 }

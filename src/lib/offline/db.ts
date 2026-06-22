@@ -23,7 +23,7 @@
  */
 
 const DB_NAME = "appcouple-offline"
-const DB_VERSION = 1
+const DB_VERSION = 2
 
 /** Store clé→valeur du cache de lecture. */
 const CACHE_STORE = "cache"
@@ -37,10 +37,10 @@ const QUEUE_STORE = "mutations"
  * suffixées (`list-items:<listId>`).
  */
 export type CacheKey =
-  | "lists"
-  | "library"
-  | `list-items:${string}`
-  | `tasks:${string}`
+  | `${string}:lists`
+  | `${string}:library`
+  | `${string}:list-items:${string}`
+  | `${string}:tasks:${string}`
 
 /** Une entrée de cache horodatée (pour afficher « vu il y a… » plus tard). */
 export type CacheEntry<T = unknown> = {
@@ -67,10 +67,14 @@ function openDb(): Promise<IDBDatabase> {
   dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION)
 
-    req.onupgradeneeded = () => {
+    req.onupgradeneeded = (event) => {
       const db = req.result
       if (!db.objectStoreNames.contains(CACHE_STORE)) {
         db.createObjectStore(CACHE_STORE, { keyPath: "key" })
+      } else if (event.oldVersion < 2) {
+        // Les clés V1 n'étaient pas isolées par couple : purge unique à la
+        // migration, sans toucher aux mutations encore en attente.
+        req.transaction?.objectStore(CACHE_STORE).clear()
       }
       if (!db.objectStoreNames.contains(QUEUE_STORE)) {
         // Clé = `id` de la mutation ; un index sur `createdAt` garantit un
@@ -178,6 +182,16 @@ export async function queueClear(): Promise<void> {
   if (!hasIndexedDb()) return
   const db = await openDb()
   const tx = db.transaction(QUEUE_STORE, "readwrite")
+  tx.objectStore(QUEUE_STORE).clear()
+  await txDone(tx)
+}
+
+/** Purge cache et mutations lors d'une déconnexion ou d'un changement d'espace. */
+export async function clearOfflineData(): Promise<void> {
+  if (!hasIndexedDb()) return
+  const db = await openDb()
+  const tx = db.transaction([CACHE_STORE, QUEUE_STORE], "readwrite")
+  tx.objectStore(CACHE_STORE).clear()
   tx.objectStore(QUEUE_STORE).clear()
   await txDone(tx)
 }

@@ -51,13 +51,14 @@ export default async function ListDetailPage({
 
   const supabase = await createClient()
 
-  const { data: list } = await supabase
+  const { data: list, error: listError } = await supabase
     .from("lists")
     .select("id, name, kind")
     .eq("id", listId)
     .eq("couple_id", profile.couple_id)
     .maybeSingle()
 
+  if (listError) throw new Error("Impossible de charger la liste")
   if (!list) notFound()
 
   // Routage par type (ARCHITECTURE_V2 §4, option A) : une to-do list rend son
@@ -84,6 +85,10 @@ export default async function ListDetailPage({
         .select("id, display_name, color")
         .eq("couple_id", profile.couple_id),
     ])
+
+    if (tasksRes.error || doneRes.error || membersRes.error) {
+      throw new Error("Impossible de charger la to-do list")
+    }
 
     const toTaskView = (row: {
       id: string
@@ -116,6 +121,7 @@ export default async function ListDetailPage({
       <section className="mx-auto w-full max-w-sm">
         <TodoListView
           listId={list.id}
+          coupleId={profile.couple_id}
           name={list.name}
           members={todoMembers}
           currentMemberId={profile.id}
@@ -151,6 +157,10 @@ export default async function ListDetailPage({
       .select("id, display_name, color")
       .eq("couple_id", profile.couple_id),
   ])
+
+  if (itemsRes.error || categoriesRes.error || membersRes.error) {
+    throw new Error("Impossible de charger la liste de courses")
+  }
 
   const items: ItemView[] = (itemsRes.data ?? []).map((row) => ({
     id: row.id,

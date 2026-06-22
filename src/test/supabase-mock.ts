@@ -21,7 +21,7 @@ export type QueryResult = {
 
 export type QueryContext = {
   table: string
-  op: "select" | "insert" | "update" | "delete"
+  op: "select" | "insert" | "update" | "delete" | "rpc"
   filters: Record<string, unknown>
   payload: unknown
   /** Méthode terminale ayant déclenché la résolution. */
@@ -32,6 +32,7 @@ export type SupabaseMock = {
   client: {
     auth: { getUser: ReturnType<typeof vi.fn> }
     from: (table: string) => unknown
+    rpc: (name: string, payload?: unknown) => Promise<QueryResult>
   }
   /** Historique ordonné des requêtes résolues. */
   calls: QueryContext[]
@@ -114,6 +115,17 @@ export function createSupabaseMock(opts: {
     client: {
       auth: { getUser: vi.fn(async () => ({ data: { user } })) },
       from,
+      rpc: (name: string, payload?: unknown) => {
+        const ctx: QueryContext = {
+          table: name,
+          op: "rpc",
+          filters: {},
+          payload,
+          terminal: "await",
+        }
+        calls.push(ctx)
+        return Promise.resolve(handler(ctx))
+      },
     },
     calls,
   }

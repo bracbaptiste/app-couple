@@ -45,8 +45,13 @@ export default async function LibraryPage() {
       .from("lists")
       .select("id, name")
       .eq("couple_id", profile.couple_id)
+      .eq("kind", "courses")
       .order("position", { ascending: true }),
   ])
+
+  if (itemsRes.error || categoriesRes.error || listsRes.error) {
+    throw new Error("Impossible de charger la bibliothèque")
+  }
 
   const items = itemsRes.data ?? []
   const categories = categoriesRes.data ?? []

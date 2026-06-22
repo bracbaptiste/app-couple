@@ -8,6 +8,12 @@ import { createClient } from "@/lib/supabase/server"
 const COLORS = ["sauge", "brique"] as const
 type Color = (typeof COLORS)[number]
 
+type RpcResult = { ok?: boolean; code?: string; invite_code?: string }
+
+function asRpcResult(value: unknown): RpcResult {
+  return value && typeof value === "object" ? (value as RpcResult) : {}
+}
+
 /**
  * État renvoyé au formulaire « Créer ». En cas de succès on NE redirige PAS
  * tout de suite : on renvoie l'`inviteCode` pour que le créateur puisse le
@@ -56,45 +62,24 @@ export async function createCouple(
   } = await supabase.auth.getUser()
   if (!user) redirect("/login")
 
-  // Garde-fou : un profil déjà rattaché ne refait pas l'onboarding.
-  const { data: existing } = await supabase
-    .from("profiles")
-    .select("couple_id")
-    .eq("id", user.id)
-    .single()
-  if (existing?.couple_id) redirect("/lists")
+  // Une transaction DB unique : couple, profil et catégories sont tous créés
+  // ou tous annulés. Aucun état d'onboarding partiel ne peut subsister.
+  const { data, error } = await supabase.rpc("create_couple", {
+    p_display_name: displayName,
+    p_color: color,
+  })
 
-  // 1. Création du couple. `created_by` satisfait la policy d'INSERT, et
-  //    l'invite_code est généré par le DEFAULT (generate_invite_code()).
-  const { data: couple, error: coupleError } = await supabase
-    .from("couples")
-    .insert({ created_by: user.id })
-    .select("id, invite_code")
-    .single()
-
-  if (coupleError || !couple) {
+  if (error) {
     return { error: "Impossible de créer l'espace couple. Réessaie." }
   }
 
-  // 2. Profil : prénom + couleur choisie + rattachement.
-  const { error: profileError } = await supabase
-    .from("profiles")
-    .update({ display_name: displayName, color, couple_id: couple.id })
-    .eq("id", user.id)
-
-  if (profileError) {
-    return { error: "Espace créé, mais le profil n'a pas pu être complété." }
+  const result = asRpcResult(data)
+  if (result.code === "ALREADY_MEMBER") redirect("/lists")
+  if (!result.ok || !result.invite_code) {
+    return { error: "Impossible de créer l'espace couple. Réessaie." }
   }
 
-  // 3. Catégories de départ (fonction SECURITY DEFINER, garde d'appartenance).
-  const { error: catError } = await supabase.rpc("create_default_categories", {
-    p_couple_id: couple.id,
-  })
-  if (catError) {
-    return { error: "Espace créé, mais les rayons n'ont pas pu être ajoutés." }
-  }
-
-  return { inviteCode: couple.invite_code }
+  return { inviteCode: result.invite_code }
 }
 
 /**
@@ -131,28 +116,37 @@ export async function joinCouple(
     .single()
   if (existing?.couple_id) redirect("/lists")
 
-  const { error } = await supabase.rpc("join_couple", {
+  const { data, error } = await supabase.rpc("join_couple", {
     p_code: code,
     p_display_name: displayName,
   })
 
   if (error) {
-    return { error: messageFromJoinError(error.message) }
+    return { error: "Impossible de rejoindre cet espace. Réessaie." }
   }
+
+  const result = asRpcResult(data)
+  if (!result.ok) return { error: messageFromJoinCode(result.code) }
 
   redirect("/lists")
 }
 
-/** Traduit l'exception SQL de `join_couple` en message utilisateur. */
-function messageFromJoinError(raw: string): string {
-  if (raw.includes("Code invalide")) {
+/** Traduit le code structuré de `join_couple` en message utilisateur. */
+function messageFromJoinCode(code?: string): string {
+  if (code === "INVALID_CODE") {
     return "Ce code d'invitation n'existe pas. Vérifie les 6 chiffres."
   }
-  if (raw.includes("Couple complet")) {
+  if (code === "COUPLE_FULL") {
     return "Cet espace est déjà complet (2 personnes maximum)."
   }
-  if (raw.includes("Prénom requis")) {
+  if (code === "NAME_REQUIRED") {
     return "Entre ton prénom."
+  }
+  if (code === "RATE_LIMITED") {
+    return "Trop de tentatives. Attends 15 minutes avant de réessayer."
+  }
+  if (code === "ALREADY_MEMBER") {
+    return "Ton compte appartient déjà à un espace couple."
   }
   return "Impossible de rejoindre cet espace. Réessaie."
 }

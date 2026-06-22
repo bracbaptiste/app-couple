@@ -145,15 +145,8 @@ export async function deleteList(listId: string): Promise<ActionResult> {
 
   if (!list) return { ok: false, error: "Liste introuvable." }
 
-  const { error: itemsError } = await supabase
-    .from("list_items")
-    .delete()
-    .eq("list_id", listId)
-
-  if (itemsError) {
-    return { ok: false, error: "Suppression impossible. Réessaie." }
-  }
-
+  // Les articles et tâches sont supprimés atomiquement par les FK ON DELETE
+  // CASCADE, dans la même transaction que la liste.
   const { error: deleteError } = await supabase
     .from("lists")
     .delete()

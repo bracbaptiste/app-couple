@@ -35,14 +35,24 @@ export default async function ListsPage() {
     // « Partager avec … » du sheet de création.
     supabase
       .from("profiles")
-      .select("id, display_name")
+      .select("id, display_name, color")
       .eq("couple_id", profile.couple_id),
   ])
+
+  if (listsRes.error || membersRes.error) {
+    throw new Error("Impossible de charger les listes")
+  }
 
   const lists = listsRes.data
   const partner =
     membersRes.data?.find((m) => m.id !== user.id) ?? null
   const partnerName = partner?.display_name?.trim() || null
+  const memberColors = new Map(
+    (membersRes.data ?? []).map((member) => [
+      member.id,
+      member.color === "brique" ? "brique" : "sauge",
+    ] as const),
+  )
 
   // On sépare les ids par type : les listes de courses comptent leurs
   // `list_items`, les listes to-do comptent leurs `tasks` (modèle V2,
@@ -64,14 +74,18 @@ export default async function ListsPage() {
           .from("list_items")
           .select("list_id, is_checked, created_at, checked_at")
           .in("list_id", coursesIds)
-      : Promise.resolve({ data: [] as const }),
+      : Promise.resolve({ data: [] as const, error: null }),
     todoIds.length
       ? supabase
           .from("tasks")
           .select("list_id, is_done, created_at, done_at")
           .in("list_id", todoIds)
-      : Promise.resolve({ data: [] as const }),
+      : Promise.resolve({ data: [] as const, error: null }),
   ])
+
+  if (itemsRes.error || tasksRes.error) {
+    throw new Error("Impossible de charger le contenu des listes")
+  }
 
   const items = itemsRes.data
   const tasks = tasksRes.data
@@ -127,11 +141,7 @@ export default async function ListsPage() {
       isShared: l.is_shared === true,
       // Couleur d'identité du propriétaire pour le logo des listes non partagées
       // (toi = sauge, la conjointe = brique). Null si propriétaire inconnu.
-      ownerColor: l.owner_id
-        ? l.owner_id === user.id
-          ? "sauge"
-          : "brique"
-        : null,
+      ownerColor: l.owner_id ? (memberColors.get(l.owner_id) ?? null) : null,
       total: agg?.total ?? 0,
       unchecked: agg?.unchecked ?? 0,
       updatedAt: Number.isFinite(lastMs) ? new Date(lastMs).toISOString() : null,

@@ -33,12 +33,13 @@ export async function getCurrentUserProfile(): Promise<Profile | null> {
 
   if (!user) return null;
 
-  const { data: profile } = await supabase
+  const { data: profile, error } = await supabase
     .from("profiles")
     .select("*")
     .eq("id", user.id)
     .single();
 
+  if (error) throw new Error("Impossible de charger le profil utilisateur");
   return profile;
 }
 
@@ -65,11 +66,12 @@ export async function requireAuth(): Promise<AuthenticatedUser> {
     redirect("/login");
   }
 
-  const { data: profile } = await supabase
+  const { data: profile, error } = await supabase
     .from("profiles")
     .select("*")
     .eq("id", user.id)
     .single();
 
+  if (error) throw new Error("Impossible de charger le profil utilisateur");
   return { user, profile };
 }

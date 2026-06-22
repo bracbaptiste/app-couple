@@ -5,12 +5,9 @@ import {
   useEffect,
   useMemo,
   useOptimistic,
-  useRef,
   useState,
   useTransition,
 } from "react"
-
-import { useOnlineStatus } from "@/lib/offline/use-online-status"
 
 /**
  * useOfflineOptimistic — feedback immédiat des mutations de liste, résilient
@@ -48,16 +45,19 @@ export function useOfflineOptimistic<TItem, TAction>(
   /** Applique l'action en optimiste, et la mémorise si l'on est hors ligne. */
   apply: (action: TAction) => void
 } {
-  const online = useOnlineStatus()
   const [optimistic, applyOptimistic] = useOptimistic(base, reduce)
   const [isPending, startAction] = useTransition()
 
   const [offlinePatches, setOfflinePatches] = useState<TAction[]>([])
-  const wasOnline = useRef(true)
   useEffect(() => {
-    if (online && !wasOnline.current) setOfflinePatches([])
-    wasOnline.current = online
-  }, [online])
+    const clearSyncedPatches = () => setOfflinePatches([])
+    window.addEventListener("appcouple:offline-sync-complete", clearSyncedPatches)
+    return () =>
+      window.removeEventListener(
+        "appcouple:offline-sync-complete",
+        clearSyncedPatches,
+      )
+  }, [])
 
   const display = useMemo(
     () => offlinePatches.reduce(reduce, optimistic),

@@ -109,7 +109,11 @@ export function ListDetail({
   // Cache de lecture : on enregistre la dernière copie connue de l'écran à
   // chaque chargement (en ligne). Fondation pour la consultation hors ligne
   // (cf. limites dans use-offline-cache.ts).
-  useOfflineCache(`list-items:${listId}`, { items, categories, members })
+  useOfflineCache(`${coupleId}:list-items:${listId}`, {
+    items,
+    categories,
+    members,
+  })
 
   // Index prénom/couleur par id de profil, pour le marqueur « ajouté par ».
   const membersById = useMemo(() => {

@@ -71,7 +71,7 @@ export function ListsManager({
   useRealtimeLists(coupleId)
 
   // Cache de lecture (fondation hors ligne) : on garde la dernière grille connue.
-  useOfflineCache("lists", lists)
+  useOfflineCache(`${coupleId}:lists`, lists)
 
   // Le bouton « + » ouvre le sheet de création (PRD_V2 §2.3).
   const [creating, setCreating] = useState(false)

@@ -48,6 +48,10 @@ export default async function ProfilePage() {
       .eq("couple_id", profile.couple_id),
   ])
 
+  if (coupleRes.error || membersRes.error) {
+    throw new Error("Impossible de charger le profil")
+  }
+
   const couple = coupleRes.data
   const members = membersRes.data ?? []
   const partner = members.find((m) => m.id !== user.id) ?? null

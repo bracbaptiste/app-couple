@@ -112,9 +112,9 @@ export async function requestPasswordReset(
   }
 
   const supabase = await createClient()
-  // La page de saisie du nouveau mot de passe (/reset-password) viendra plus tard.
+  // Le callback échange le code PKCE avant d'ouvrir le formulaire sécurisé.
   await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${await getOrigin()}/reset-password`,
+    redirectTo: `${await getOrigin()}/auth/callback?next=/reset-password`,
   })
 
   // Réponse volontairement neutre : ne révèle pas si l'e-mail existe.
@@ -122,6 +122,38 @@ export async function requestPasswordReset(
     message:
       "Si un compte existe pour cette adresse, un e-mail de réinitialisation vient d'être envoyé.",
   }
+}
+
+/** Enregistre le nouveau mot de passe après validation du lien de récupération. */
+export async function updatePassword(
+  _prev: AuthState,
+  formData: FormData,
+): Promise<AuthState> {
+  const password = String(formData.get("password") ?? "")
+  const confirm = String(formData.get("confirm") ?? "")
+
+  if (password.length < 8) {
+    return { error: "Le mot de passe doit faire au moins 8 caractères." }
+  }
+  if (password !== confirm) {
+    return { error: "Les deux mots de passe ne correspondent pas." }
+  }
+
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  if (!user) {
+    return { error: "Ce lien a expiré. Demande un nouveau lien de récupération." }
+  }
+
+  const { error } = await supabase.auth.updateUser({ password })
+  if (error) {
+    return { error: "Impossible de modifier le mot de passe. Réessaie." }
+  }
+
+  redirect(await resolveLandingPath(supabase, user.id))
 }
 
 /** Déconnexion : invalide la session puis renvoie vers /login. */

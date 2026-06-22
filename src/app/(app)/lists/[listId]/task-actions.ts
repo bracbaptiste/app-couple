@@ -69,6 +69,8 @@ async function assertTodoListOwned(
 
 /** Entrées de {@link addTask}. */
 export type AddTaskInput = {
+  /** UUID généré côté client, conservé lors d'un éventuel rejeu hors ligne. */
+  taskId: string
   listId: string
   /** Intitulé brut saisi (sera borné). */
   rawTitle: string
@@ -88,6 +90,7 @@ export async function addTask(input: AddTaskInput): Promise<ActionResult> {
   }
 
   const { error } = await supabase.from("tasks").insert({
+    id: input.taskId,
     list_id: input.listId,
     title,
     due_date: input.dueDate ?? null,
@@ -95,6 +98,9 @@ export async function addTask(input: AddTaskInput): Promise<ActionResult> {
   })
 
   if (error) {
+    // Un rejeu après une réponse réseau perdue retrouve la même tâche : succès
+    // idempotent, pas de seconde ligne.
+    if (error.code === "23505") return { ok: true }
     return { ok: false, error: "Impossible d’ajouter la tâche. Réessaie." }
   }
 

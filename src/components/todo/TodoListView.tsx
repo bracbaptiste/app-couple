@@ -37,6 +37,7 @@ export type TaskView = {
 
 type TodoListViewProps = {
   listId: string
+  coupleId: string
   name: string
   members: TodoMemberView[]
   /** Id du profil courant — pour le marqueur d'une tâche ajoutée optimistement. */
@@ -118,6 +119,7 @@ function applyTaskAction(
  */
 export function TodoListView({
   listId,
+  coupleId,
   name,
   members,
   currentMemberId,
@@ -132,7 +134,7 @@ export function TodoListView({
 
   // Cache de lecture : dernière copie connue de l'écran (à chaque chargement en
   // ligne). Fondation pour la consultation hors ligne (cf. use-offline-cache.ts).
-  useOfflineCache(`tasks:${listId}`, { tasks, doneTasks, members })
+  useOfflineCache(`${coupleId}:tasks:${listId}`, { tasks, doneTasks, members })
 
   // Index prénom/couleur par id de profil, pour le marqueur « ajouté par ».
   const membersById = useMemo(() => {
@@ -160,9 +162,11 @@ export function TodoListView({
   function handleAdd(title: string, dueDate?: Date) {
     setError(undefined)
     const iso = dueDate ? dueDate.toISOString().slice(0, 10) : null
-    // Tâche optimiste : id temporaire (remplacé par la vraie ligne au refresh).
+    // UUID partagé par l'optimiste, la file hors ligne et la base. Un rejeu de
+    // la création cible donc toujours la même ligne.
+    const taskId = crypto.randomUUID()
     const optimisticTask: TaskView = {
-      id: `tmp_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+      id: taskId,
       title,
       note: null,
       dueDate: iso,
@@ -174,6 +178,7 @@ export function TodoListView({
     startAction(async () => {
       apply(action)
       const result = await runMutation("addTask", {
+        taskId,
         listId,
         rawTitle: title,
         dueDate: iso,
@@ -278,11 +283,6 @@ export function TodoListView({
             {pending.length > 0 && (
               <ul className="flex flex-col gap-2">
                 {pending.map((task) => {
-                  // Une tâche encore en id temporaire (`tmp_…`) n'est pas
-                  // persistée : modifier / supprimer viserait une ligne serveur
-                  // inexistante (no-op silencieux). On masque ces actions tant
-                  // que la vraie ligne n'est pas revenue du serveur.
-                  const synced = !task.id.startsWith("tmp_")
                   return (
                     <TaskItem
                       key={task.id}
@@ -297,8 +297,8 @@ export function TodoListView({
                           : null
                       }
                       onToggle={handleToggle}
-                      onEdit={synced ? handleEdit : undefined}
-                      onDelete={synced ? handleDelete : undefined}
+                      onEdit={handleEdit}
+                      onDelete={handleDelete}
                     />
                   )
                 })}

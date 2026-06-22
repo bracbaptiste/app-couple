@@ -36,6 +36,10 @@ export default async function CategoriesPage() {
       .eq("couple_id", profile.couple_id),
   ])
 
+  if (categoriesRes.error || libItemsRes.error) {
+    throw new Error("Impossible de charger les rayons")
+  }
+
   // Décompte des produits par rayon (pour bloquer une suppression « brutale »).
   const counts = new Map<string, number>()
   for (const item of libItemsRes.data ?? []) {

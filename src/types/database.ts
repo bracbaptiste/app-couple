@@ -350,17 +350,32 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      create_couple: {
+        Args: { p_color: string; p_display_name: string }
+        Returns: Json
+      }
       create_default_categories: {
         Args: { p_couple_id: string }
         Returns: undefined
       }
       current_couple_id: { Args: never; Returns: string }
+      delete_category_with_replacement: {
+        Args: { p_category_id: string; p_replacement_id?: string | null }
+        Returns: Json
+      }
       generate_invite_code: { Args: never; Returns: string }
+      increment_library_usage: {
+        Args: { p_item_id: string }
+        Returns: undefined
+      }
       join_couple: {
         Args: { p_code: string; p_display_name: string }
-        Returns: string
+        Returns: Json
       }
-      join_couple_with_code: { Args: { p_code: string }; Returns: string }
+      move_category: {
+        Args: { p_category_id: string; p_direction: string }
+        Returns: boolean
+      }
     }
     Enums: {
       [_ in never]: never

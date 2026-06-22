@@ -24,12 +24,14 @@ export default async function TaskHistoryPage() {
 
   // La RLS sur `tasks` (et la jointure `lists`) restreint déjà aux listes
   // accessibles : pas de filtre couple_id explicite ici (tasks n'en a pas).
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("tasks")
     .select("id, title, done_at, lists(name)")
     .eq("is_done", true)
     .order("done_at", { ascending: false })
     .limit(50)
+
+  if (error) throw new Error("Impossible de charger l'historique des tâches")
 
   const entries: HistoryEntry[] = (data ?? []).map((row) => ({
     id: row.id,

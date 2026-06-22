@@ -63,12 +63,16 @@ export function OfflineIndicator() {
 
     setSync({ phase: "syncing" })
     const result = await replayQueue()
-    setPending(await pendingCount())
+    const remaining = await pendingCount()
+    setPending(remaining)
 
     if (result.failed > 0) {
       setSync({ phase: "error", failed: result.failed })
     } else {
       setSync({ phase: "idle" })
+    }
+    if (remaining === 0) {
+      window.dispatchEvent(new Event("appcouple:offline-sync-complete"))
     }
     // Réaligne l'UI sur le serveur : les Server Actions rejouées ont déjà
     // revalidé leurs chemins, `refresh()` rapatrie les données fraîches.

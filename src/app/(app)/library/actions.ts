@@ -210,11 +210,13 @@ export async function sendToList(
   // La liste doit appartenir au couple courant (borne le list_id du client).
   const { data: list } = await supabase
     .from("lists")
-    .select("id")
+    .select("id, kind")
     .eq("id", listId)
     .eq("couple_id", coupleId)
     .maybeSingle()
-  if (!list) return { ok: false, error: "Liste introuvable." }
+  if (!list || list.kind !== "courses") {
+    return { ok: false, error: "Choisis une liste de courses." }
+  }
 
   // Déjà présent et non coché dans cette liste ? On ne duplique pas.
   const { data: dup } = await supabase
@@ -237,14 +239,7 @@ export async function sendToList(
   }
 
   // Renforce la fréquence d'usage (tri de la Bibliothèque).
-  await supabase
-    .from("library_items")
-    .update({
-      usage_count: product.usage_count + 1,
-      last_used_at: new Date().toISOString(),
-    })
-    .eq("id", libraryItemId)
-    .eq("couple_id", coupleId)
+  await supabase.rpc("increment_library_usage", { p_item_id: libraryItemId })
 
   revalidatePath("/library")
   revalidatePath(`/lists/${listId}`)
@@ -277,11 +272,13 @@ export async function sendManyToList(
   // La liste doit appartenir au couple courant (borne le list_id du client).
   const { data: list } = await supabase
     .from("lists")
-    .select("id")
+    .select("id, kind")
     .eq("id", listId)
     .eq("couple_id", coupleId)
     .maybeSingle()
-  if (!list) return { ok: false, error: "Liste introuvable." }
+  if (!list || list.kind !== "courses") {
+    return { ok: false, error: "Choisis une liste de courses." }
+  }
 
   // Ne garder que les produits réellement possédés (borne les ids du client).
   const { data: owned } = await supabase
@@ -323,14 +320,9 @@ export async function sendManyToList(
 
   // Renforce la fréquence d'usage de tous les produits envoyés (doublon compris :
   // renvoyer un article reste un signal d'usage).
-  const now = new Date().toISOString()
   await Promise.all(
     owned.map((p) =>
-      supabase
-        .from("library_items")
-        .update({ usage_count: p.usage_count + 1, last_used_at: now })
-        .eq("id", p.id)
-        .eq("couple_id", coupleId),
+      supabase.rpc("increment_library_usage", { p_item_id: p.id }),
     ),
   )
 
