@@ -430,7 +430,14 @@ function LibraryRow({
           // Bordure encre continue autour du calque révélé (haut/droite/bas
           // + coins droits arrondis) : prolonge le trait de la carte pour que
           // toute la rangée garde un contour encre fermé une fois ouverte.
-          className="absolute inset-y-0 right-0 z-0 flex overflow-hidden rounded-r-[10px] border-y-2 border-r-2 border-ink"
+          // Masqué au repos : la carte (translucide quand sélectionnée) ne doit
+          // PAS laisser transparaître le crayon / la corbeille tant que la ligne
+          // n'est pas glissée. Réapparaît au glissement, au drag ou au focus
+          // clavier (onFocus ré-ouvre la ligne, donc offset ≠ 0 → opaque).
+          className={cn(
+            "absolute inset-y-0 right-0 z-0 flex overflow-hidden rounded-r-[10px] border-y-2 border-r-2 border-ink transition-opacity duration-200 motion-reduce:transition-none",
+            offset === 0 && !dragging ? "opacity-0" : "opacity-100",
+          )}
           onFocus={() => setOffset(-SWIPE_REVEAL)}
           onBlur={(e) => {
             if (!e.currentTarget.contains(e.relatedTarget as Node)) closeSwipe()
