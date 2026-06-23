@@ -33,6 +33,9 @@ type MediaTypeOk = (typeof MEDIA_TYPES_OK)[number]
 /** Garde-fou taille (l'API rejette au-delà ; on coupe avant l'appel). */
 const TAILLE_MAX_OCTETS = 8 * 1024 * 1024 // 8 Mo
 
+/** Garde-fou nombre d'images : une recette peut tenir sur plusieurs pages. */
+const MAX_IMAGES = 8
+
 function erreur(message: string, status: number) {
   return Response.json({ error: message }, { status })
 }
@@ -55,7 +58,9 @@ export async function POST(request: Request) {
     )
   }
 
-  // 3. Lecture de l'image envoyée en multipart/form-data (champ « image »).
+  // 3. Lecture des images en multipart/form-data (champ « image », répétable).
+  //    Une recette peut s'étaler sur plusieurs photos (pages, recto/verso…) :
+  //    on accepte plusieurs fichiers et on les transmettra dans le MÊME appel.
   let form: FormData
   try {
     form = await request.formData()
@@ -63,21 +68,46 @@ export async function POST(request: Request) {
     return erreur("Requête invalide : multipart/form-data attendu.", 400)
   }
 
-  const image = form.get("image")
-  if (!(image instanceof File) || image.size === 0) {
+  const images = form
+    .getAll("image")
+    .filter((v): v is File => v instanceof File && v.size > 0)
+
+  if (images.length === 0) {
     return erreur("Aucune image reçue (champ « image »).", 400)
   }
-  if (!MEDIA_TYPES_OK.includes(image.type as MediaTypeOk)) {
-    return erreur(
-      `Format non supporté (${image.type || "inconnu"}). Attendu : JPEG, PNG, WebP ou GIF.`,
-      415,
-    )
+  if (images.length > MAX_IMAGES) {
+    return erreur(`Trop d'images (max ${MAX_IMAGES} par recette).`, 413)
   }
-  if (image.size > TAILLE_MAX_OCTETS) {
-    return erreur("Image trop volumineuse (max 8 Mo).", 413)
+  for (const image of images) {
+    if (!MEDIA_TYPES_OK.includes(image.type as MediaTypeOk)) {
+      return erreur(
+        `Format non supporté (${image.type || "inconnu"}). Attendu : JPEG, PNG, WebP ou GIF.`,
+        415,
+      )
+    }
+    if (image.size > TAILLE_MAX_OCTETS) {
+      return erreur("Une image est trop volumineuse (max 8 Mo).", 413)
+    }
   }
 
-  const base64 = Buffer.from(await image.arrayBuffer()).toString("base64")
+  // Bloc image par photo (base64), dans l'ordre reçu.
+  const imageBlocks = await Promise.all(
+    images.map(async (image) => ({
+      type: "image" as const,
+      source: {
+        type: "base64" as const,
+        media_type: image.type as MediaTypeOk,
+        data: Buffer.from(await image.arrayBuffer()).toString("base64"),
+      },
+    })),
+  )
+
+  // Quand plusieurs photos sont fournies, on précise qu'elles forment UNE SEULE
+  // recette (sans toucher au prompt §7.4 partagé/testé : on l'ajoute en préambule).
+  const consigneMulti =
+    images.length > 1
+      ? `Les ${images.length} images suivantes sont plusieurs photos d'UNE SEULE et même recette (par exemple plusieurs pages). Combine-les en une seule recette cohérente.\n\n`
+      : ""
 
   // 4. Appel Claude Sonnet 4.6 en vision. Un seul appel : la vision lit l'image
   //    ET structure le JSON dans la même requête (PRD §3).
@@ -92,15 +122,8 @@ export async function POST(request: Request) {
         {
           role: "user",
           content: [
-            {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: image.type as MediaTypeOk,
-                data: base64,
-              },
-            },
-            { type: "text", text: PROMPT_EXTRACTION },
+            ...imageBlocks,
+            { type: "text", text: consigneMulti + PROMPT_EXTRACTION },
           ],
         },
       ],
