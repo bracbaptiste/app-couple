@@ -5,6 +5,7 @@ import { notFound, redirect } from "next/navigation"
 import { createClient } from "@/lib/supabase/server"
 import { requireAuth } from "@/lib/supabase/auth"
 import { purchaseArchiveCutoffIso } from "@/lib/purchase-window"
+import { parseQuantites } from "@/lib/recipes/fusion"
 
 import {
   ListDetail,
@@ -142,7 +143,7 @@ export default async function ListDetailPage({
     supabase
       .from("list_items")
       .select(
-        "id, quantity, note, is_checked, checked_at, added_by, created_at, library_item_id, library_items(name, category_id)",
+        "id, quantity, quantities, note, is_checked, checked_at, added_by, created_at, library_item_id, library_items(name, category_id)",
       )
       .eq("list_id", listId)
       .or(`is_checked.eq.false,checked_at.gte.${recentCheckedCutoff}`)
@@ -167,6 +168,8 @@ export default async function ListDetailPage({
     libraryItemId: row.library_item_id,
     name: row.library_items?.name ?? "Article",
     quantity: row.quantity,
+    // Quantités structurées issues des recettes (fusion §6), décodées du jsonb.
+    quantities: parseQuantites(row.quantities),
     note: row.note,
     isChecked: row.is_checked,
     checkedAt: row.checked_at,

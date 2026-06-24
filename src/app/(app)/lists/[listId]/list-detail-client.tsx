@@ -14,6 +14,8 @@ import { runMutation } from "@/lib/offline/mutation-queue"
 import { useOfflineCache } from "@/lib/offline/use-offline-cache"
 import { useOfflineOptimistic } from "@/lib/offline/use-offline-optimistic"
 import { useSwipeReveal } from "@/lib/hooks/useSwipeReveal"
+import { formatQuantites } from "@/lib/recipes/format"
+import { type QuantiteBase } from "@/lib/recipes/fusion"
 
 import { type ActionResult } from "./actions"
 
@@ -37,7 +39,10 @@ export type ItemView = {
   id: string
   libraryItemId: string
   name: string
+  /** Quantité libre saisie à la main (« 2 boîtes »…). */
   quantity: string | null
+  /** Quantités structurées issues des recettes (fusion §6), en unités de base. */
+  quantities: QuantiteBase[]
   note: string | null
   isChecked: boolean
   /** Horodatage ISO du cochage (= « acheté le »), ou `null` si à acheter. */
@@ -436,13 +441,21 @@ function ItemRow({
           >
             {item.name}
           </p>
-          {(item.quantity || item.note) && (
-            <p className="truncate font-mono text-[11px] text-ink-soft">
-              {item.quantity}
-              {item.quantity && item.note ? " · " : ""}
-              {item.note}
-            </p>
-          )}
+          {(() => {
+            // Méta sous le nom : on agrège les sources disponibles, séparées par
+            // « · ». Les quantités issues des recettes (structurées, fusion §6)
+            // d'abord, puis la quantité libre saisie à la main, puis la note.
+            const parts = [
+              item.quantities.length > 0 ? formatQuantites(item.quantities) : null,
+              item.quantity || null,
+              item.note || null,
+            ].filter(Boolean)
+            return parts.length > 0 ? (
+              <p className="truncate font-mono text-[11px] text-ink-soft">
+                {parts.join(" · ")}
+              </p>
+            ) : null
+          })()}
         </div>
 
         {/* Marqueur « ajouté par » */}

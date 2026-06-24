@@ -2,7 +2,13 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { ListChecks, ShoppingCart, User, type LucideIcon } from "lucide-react"
+import {
+  ListChecks,
+  ShoppingCart,
+  ChefHat,
+  User,
+  type LucideIcon,
+} from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
@@ -24,6 +30,7 @@ export type BottomNavItem = {
 const DEFAULT_ITEMS: BottomNavItem[] = [
   { href: "/lists", label: "Listes", icon: ListChecks, hideLabel: true },
   { href: "/library", label: "Biblio", icon: ShoppingCart, hideLabel: true },
+  { href: "/recipes", label: "Recettes", icon: ChefHat, hideLabel: true },
   { href: "/profile", label: "Profil", icon: User, hideLabel: true },
 ]
 
