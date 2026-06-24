@@ -107,7 +107,7 @@ export class ExtractionParseError extends Error {
  * puis isole le premier objet `{ … }`. L'IA est censée répondre en JSON pur
  * (§7.4) mais on ne s'y fie pas : c'est la première ligne de défense.
  */
-function extraireBlocJson(rawText: string): string {
+export function extraireBlocJson(rawText: string): string {
   let s = rawText.trim()
 
   // Retire les fences ```json … ``` ou ``` … ``` si présents.
@@ -160,36 +160,15 @@ function coerceIngredient(raw: unknown): IngredientExtrait | null {
 }
 
 /**
- * Parse défensivement la réponse texte de Claude vers `RecetteExtraite` (§7.2).
+ * Coerce un objet JSON déjà parsé vers le schéma `RecetteExtraite` (§7.3).
  *
- * - retire les fences et isole l'objet JSON ;
- * - `JSON.parse` dans un `try/catch` → {@link ExtractionParseError} si illisible ;
- * - coerce chaque champ vers le schéma §7.3 (types, bornes, nullables) ;
- * - filtre `type_plat`/`tags` au jeu fermé (§10) ;
- * - repasse chaque `nom` d'ingrédient par {@link normaliserNom} (§5).
- *
- * @throws ExtractionParseError si la réponse n'est pas un objet JSON valide.
+ * Brique PARTAGÉE entre l'extraction (mode « Préserver », §7) et la génération
+ * (mode « Créer / Améliorer », §9) : les deux modes produisent le MÊME schéma de
+ * recette, donc les mêmes bornes (§10) et la même règle d'or §5 (chaque `nom`
+ * d'ingrédient repassé par {@link normaliserNom}). On ne fait jamais confiance à
+ * l'IA pour la clé ni pour les valeurs hors jeu fermé.
  */
-export function parseExtraction(rawText: string): RecetteExtraite {
-  const bloc = extraireBlocJson(rawText)
-
-  let data: unknown
-  try {
-    data = JSON.parse(bloc)
-  } catch {
-    throw new ExtractionParseError(
-      "La réponse de l'IA n'est pas un JSON valide.",
-      rawText,
-    )
-  }
-  if (!data || typeof data !== "object") {
-    throw new ExtractionParseError(
-      "La réponse de l'IA n'est pas un objet JSON.",
-      rawText,
-    )
-  }
-  const o = data as Record<string, unknown>
-
+export function coerceRecette(o: Record<string, unknown>): RecetteExtraite {
   // type_plat : un seul choix dans l'Axe 1, repli « plat » si hors-liste.
   const type_plat: TypePlat =
     typeof o.type_plat === "string" &&
@@ -233,4 +212,35 @@ export function parseExtraction(rawText: string): RecetteExtraite {
     ingredients,
     etapes,
   }
+}
+
+/**
+ * Parse défensivement la réponse texte de Claude vers `RecetteExtraite` (§7.2).
+ *
+ * - retire les fences et isole l'objet JSON ;
+ * - `JSON.parse` dans un `try/catch` → {@link ExtractionParseError} si illisible ;
+ * - coerce chaque champ via {@link coerceRecette} (schéma §7.3, bornes §10, clé §5).
+ *
+ * @throws ExtractionParseError si la réponse n'est pas un objet JSON valide.
+ */
+export function parseExtraction(rawText: string): RecetteExtraite {
+  const bloc = extraireBlocJson(rawText)
+
+  let data: unknown
+  try {
+    data = JSON.parse(bloc)
+  } catch {
+    throw new ExtractionParseError(
+      "La réponse de l'IA n'est pas un JSON valide.",
+      rawText,
+    )
+  }
+  if (!data || typeof data !== "object") {
+    throw new ExtractionParseError(
+      "La réponse de l'IA n'est pas un objet JSON.",
+      rawText,
+    )
+  }
+
+  return coerceRecette(data as Record<string, unknown>)
 }

@@ -1,7 +1,7 @@
 "use client"
 
 import Image from "next/image"
-import { Plus, Trash2, Clock, Users } from "lucide-react"
+import { Plus, Trash2, Clock, Users, Sparkles } from "lucide-react"
 import { useState, useTransition } from "react"
 
 import { RisoButton } from "@/components/ui/riso-button"
@@ -76,12 +76,25 @@ export function ReviewForm({
   photoPreviewUrls,
   onCancel,
   onSaved,
+  source = "photo",
+  suggestions = [],
 }: {
   recette: RecetteExtraite
   /** Aperçus mémoire des photos (URL.createObjectURL), le temps de la relecture. */
   photoPreviewUrls: string[]
   onCancel: () => void
   onSaved: (recipeId: string) => void
+  /**
+   * Origine de la recette enregistrée (§4) : `'photo'` (extraction, défaut),
+   * `'manuelle'` ou `'ia'` (mode « Créer / Améliorer », §9.3). Transmis tel quel
+   * à {@link createRecipe}.
+   */
+  source?: "photo" | "manuelle" | "ia"
+  /**
+   * Suggestions concrètes du mode créatif (§9.2). Affichées en encart (jamais
+   * d'interface de notation) ; non enregistrées avec la recette.
+   */
+  suggestions?: string[]
 }) {
   const [titre, setTitre] = useState(recette.titre)
   const [duree, setDuree] = useState(numToStr(recette.duree_minutes))
@@ -180,7 +193,7 @@ export function ReviewForm({
         lipidesG: strToNum(lipides),
         ingredients: ingredientsInput,
         etapes: etapesInput,
-        source: "photo",
+        source,
       })
       if (!result.ok) {
         setError(result.error)
@@ -198,9 +211,32 @@ export function ReviewForm({
           Relire & corriger
         </h1>
         <p className="-mt-2 text-[13px] leading-snug text-ink-soft">
-          L’IA fait au mieux sur l’écriture manuscrite. Vérifie et corrige tout
-          avant d’enregistrer.
+          {source === "ia"
+            ? "Voici la proposition de l’IA. Ajuste tout ce que tu veux avant d’enregistrer."
+            : "L’IA fait au mieux sur l’écriture manuscrite. Vérifie et corrige tout avant d’enregistrer."}
         </p>
+
+        {/* Suggestions concrètes du mode créatif (§9.2) — affichage seul, jamais
+            de notation. */}
+        {suggestions.length > 0 && (
+          <div className="flex flex-col gap-2 rounded-[12px] border-2 border-ink bg-paper-light p-3 shadow-riso-sauge">
+            <span className="inline-flex items-center gap-1.5 font-mono text-[11px] font-bold uppercase tracking-wide text-ink-soft">
+              <Sparkles className="size-3.5" strokeWidth={2.5} aria-hidden />
+              Suggestions de l’IA
+            </span>
+            <ul className="flex flex-col gap-1.5">
+              {suggestions.map((s, index) => (
+                <li
+                  key={index}
+                  className="flex items-start gap-2 text-[13px] leading-snug text-ink"
+                >
+                  <span className="mt-1 size-1.5 shrink-0 rounded-full bg-brique" aria-hidden />
+                  {s}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {photoPreviewUrls.length === 1 && (
           <div className="relative h-44 w-full overflow-hidden rounded-[12px] border-2 border-ink shadow-riso-sauge">

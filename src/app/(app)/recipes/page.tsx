@@ -1,38 +1,56 @@
-import Link from "next/link"
 import { redirect } from "next/navigation"
-import { Plus } from "lucide-react"
 
-import { risoButtonVariants } from "@/components/ui/riso-button"
+import { createClient } from "@/lib/supabase/server"
 import { requireAuth } from "@/lib/supabase/auth"
-import { cn } from "@/lib/utils"
+import { TYPES_PLAT, TAGS, type TypePlat, type Tag } from "@/lib/recipes/extraction"
+
+import { RecipesBrowser, type RecipeCardView } from "./recipes-client"
 
 /**
- * Carnet de recettes (/recipes) — point d'entrée du module.
+ * Carnet de recettes (/recipes) — liste filtrable (PRD_recettes §7.6).
  *
- * Pour l'instant : en-tête + bouton « Ajouter une recette » (§7.1). La liste
- * filtrable des recettes (§7.6) est une tâche distincte ; cette page lui servira
- * de coquille une fois construite.
+ * Server Component (sous RLS — on ne voit que les recettes de son couple) : on
+ * charge les colonnes nécessaires aux vignettes (photo, titre, durée, type,
+ * étiquettes, calories/portion), triées de la plus récente à la plus ancienne.
+ * La recherche par titre et les filtres (Axe 1 type de plat, Axe 2 étiquettes,
+ * §10) vivent côté client (`./recipes-client.tsx`). La fiche détaillée est une
+ * route distincte (`./[recipeId]/page.tsx`).
  */
 export default async function RecipesPage() {
   const { profile } = await requireAuth()
 
   if (!profile?.couple_id) redirect("/onboarding")
 
+  const supabase = await createClient()
+
+  const { data } = await supabase
+    .from("recipes")
+    .select(
+      "id, titre, duree_minutes, type_plat, tags, calories_par_portion, photo_url",
+    )
+    .eq("couple_id", profile.couple_id)
+    .order("created_at", { ascending: false })
+
+  // Borne `type_plat`/`tags` au jeu fermé §10 même à la lecture : une valeur
+  // hors-liste (donnée ancienne / import) ne doit pas casser le rendu.
+  const recipes: RecipeCardView[] = (data ?? []).map((r) => ({
+    id: r.id,
+    titre: r.titre,
+    dureeMinutes: r.duree_minutes,
+    typePlat: (TYPES_PLAT as readonly string[]).includes(r.type_plat)
+      ? (r.type_plat as TypePlat)
+      : "plat",
+    tags: Array.isArray(r.tags)
+      ? r.tags.filter((t): t is Tag => (TAGS as readonly string[]).includes(t))
+      : [],
+    caloriesParPortion: r.calories_par_portion,
+    photoUrl: r.photo_url,
+  }))
+
   return (
     <section className="mx-auto w-full max-w-sm">
       <h1 className="mb-4 font-display text-xl uppercase text-ink">Recettes</h1>
-
-      <Link
-        href="/recipes/new"
-        className={cn(risoButtonVariants(), "h-12 w-full text-sm")}
-      >
-        <Plus aria-hidden /> Ajouter une recette
-      </Link>
-
-      <p className="mt-6 rounded-[10px] border-2 border-dashed border-ink bg-paper-light px-4 py-6 text-center text-sm text-ink-soft">
-        Ton carnet de recettes est encore vide. Ajoute ta première recette en
-        photographiant une fiche, même manuscrite.
-      </p>
+      <RecipesBrowser recipes={recipes} />
     </section>
   )
 }
