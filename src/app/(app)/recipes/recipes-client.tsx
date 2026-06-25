@@ -1,11 +1,13 @@
 "use client"
 
 import Link from "next/link"
-import Image from "next/image"
-import { Search, Plus, ChefHat, Clock, Flame, SlidersHorizontal, X, Sparkles } from "lucide-react"
-import { useMemo, useState } from "react"
+import { Dialog } from "@base-ui/react/dialog"
+import { Search, Plus, Clock, Flame, SlidersHorizontal, X, Sparkles, Trash2 } from "lucide-react"
+import { forwardRef, useEffect, useMemo, useRef, useState, useTransition } from "react"
 
-import { risoButtonVariants } from "@/components/ui/riso-button"
+import { RisoButton } from "@/components/ui/riso-button"
+import { useSwipeReveal } from "@/lib/hooks/useSwipeReveal"
+import { deleteRecipe } from "./actions"
 import { cn } from "@/lib/utils"
 import {
   TYPES_PLAT,
@@ -17,9 +19,7 @@ import { LABELS_TYPE_PLAT, LABELS_TAG } from "@/lib/recipes/labels"
 import { formatDuree } from "@/lib/recipes/format"
 
 /**
- * Une recette aplatie pour la vignette (§7.6). `photoUrl` est presque toujours
- * `null` (les photos ne sont pas conservées — cf. flux d'ajout) : la vignette
- * dégrade alors vers un visuel « marmite » aux codes Riso.
+ * Une recette aplatie pour la vignette (§7.6).
  */
 export type RecipeCardView = {
   id: string
@@ -28,7 +28,6 @@ export type RecipeCardView = {
   typePlat: TypePlat
   tags: Tag[]
   caloriesParPortion: number | null
-  photoUrl: string | null
 }
 
 /** Normalise un libellé pour la recherche (insensible casse + accents). */
@@ -92,58 +91,29 @@ export function RecipesBrowser({ recipes }: { recipes: RecipeCardView[] }) {
     })
   }, [recipes, query, selectedTypes, selectedTags])
 
-  // Carnet entièrement vide : message d'amorçage + bouton d'ajout.
+  // Carnet entièrement vide : message d'amorçage. Le FAB (en bas à droite)
+  // reste le point d'entrée unique vers l'ajout / la création IA.
   if (recipes.length === 0) {
     return (
       <div className="flex flex-col gap-4">
-        <div className="flex flex-col gap-2">
-          <Link
-            href="/recipes/new"
-            className={cn(risoButtonVariants(), "h-12 w-full text-sm")}
-          >
-            <Plus aria-hidden /> Ajouter une recette
-          </Link>
-          <Link
-            href="/recipes/ai"
-            className={cn(
-              risoButtonVariants({ variant: "secondary" }),
-              "h-12 w-full text-sm",
-            )}
-          >
-            <Sparkles aria-hidden /> Créer avec l’IA
-          </Link>
-        </div>
         <p className="rounded-[10px] border-2 border-dashed border-ink bg-paper-light px-4 py-6 text-center text-sm text-ink-soft">
           Ton carnet de recettes est encore vide. Ajoute ta première recette en
           photographiant une fiche, même manuscrite — ou laisse l’IA t’en
-          composer une.
+          composer une, via le bouton{" "}
+          <Plus className="inline size-3.5 align-text-bottom" strokeWidth={3} aria-hidden />{" "}
+          en bas à droite.
         </p>
+        <AddRecipeFab />
       </div>
     )
   }
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-2">
-        <Link
-          href="/recipes/new"
-          className={cn(risoButtonVariants(), "h-12 w-full text-sm")}
-        >
-          <Plus aria-hidden /> Ajouter une recette
-        </Link>
-        <Link
-          href="/recipes/ai"
-          className={cn(
-            risoButtonVariants({ variant: "secondary" }),
-            "h-12 w-full text-sm",
-          )}
-        >
-          <Sparkles aria-hidden /> Créer avec l’IA
-        </Link>
-      </div>
+      <AddRecipeFab />
 
-      {/* Recherche par titre */}
-      <div className="flex items-center gap-2 rounded-[10px] border-2 border-ink bg-paper-light px-3 shadow-riso-ink focus-within:shadow-riso-sauge">
+      {/* Recherche par titre — la bascule des filtres est intégrée dans la barre */}
+      <div className="flex items-center gap-2 rounded-[10px] border-2 border-ink bg-paper-light pl-3 pr-1.5 shadow-riso-ink focus-within:shadow-riso-sauge">
         <Search className="size-5 shrink-0 text-ink" strokeWidth={2.5} aria-hidden />
         <input
           type="search"
@@ -156,34 +126,31 @@ export function RecipesBrowser({ recipes }: { recipes: RecipeCardView[] }) {
           aria-label="Rechercher une recette par titre"
           className="h-12 w-full bg-transparent text-base font-medium text-ink outline-none placeholder:font-body placeholder:text-ink-soft"
         />
-      </div>
-
-      {/* Bascule du panneau de filtres */}
-      <div className="flex items-center gap-2">
         <button
           type="button"
           aria-expanded={filtersOpen}
+          aria-label={`Filtrer les recettes${activeFilterCount > 0 ? ` (${activeFilterCount} actif${activeFilterCount > 1 ? "s" : ""})` : ""}`}
           onClick={() => setFiltersOpen((v) => !v)}
-          className="inline-flex min-h-11 items-center gap-2 rounded-[8px] border-2 border-ink bg-paper-light px-3 font-display text-[11px] uppercase leading-none text-ink shadow-riso-sauge outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px active:shadow-none"
+          className="relative inline-flex size-9 shrink-0 items-center justify-center rounded-[7px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px"
         >
-          <SlidersHorizontal className="size-4" strokeWidth={2.5} aria-hidden />
-          Filtrer
+          <SlidersHorizontal className="size-5" strokeWidth={2.5} aria-hidden />
           {activeFilterCount > 0 && (
-            <span className="inline-flex size-5 items-center justify-center rounded-[5px] border-2 border-ink bg-brique text-[10px] text-paper-light">
+            <span className="absolute -right-1.5 -top-1.5 inline-flex size-4 items-center justify-center rounded-[5px] border-2 border-ink bg-brique text-[9px] text-paper-light">
               {activeFilterCount}
             </span>
           )}
         </button>
-        {activeFilterCount > 0 && (
-          <button
-            type="button"
-            onClick={clearFilters}
-            className="inline-flex min-h-11 items-center gap-1 rounded-[8px] px-2 font-mono text-[12px] font-bold text-ink-soft outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
-          >
-            <X className="size-3.5" strokeWidth={2.5} aria-hidden /> Effacer
-          </button>
-        )}
       </div>
+
+      {activeFilterCount > 0 && (
+        <button
+          type="button"
+          onClick={clearFilters}
+          className="inline-flex min-h-11 items-center gap-1 self-start rounded-[8px] px-2 font-mono text-[12px] font-bold text-ink-soft outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+        >
+          <X className="size-3.5" strokeWidth={2.5} aria-hidden /> Effacer
+        </button>
+      )}
 
       {filtersOpen && (
         <div className="flex flex-col gap-4 rounded-[12px] border-2 border-ink bg-paper-light p-3 shadow-riso-sauge">
@@ -237,6 +204,149 @@ export function RecipesBrowser({ recipes }: { recipes: RecipeCardView[] }) {
     </div>
   )
 }
+
+/* -------------------------------------------------------------------------- */
+/*  FAB d'ajout (déployable)                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Bouton flottant « + » ancré en bas à droite (mêmes codes que le FAB des
+ * listes : carré 48px, brique, ombre encre, au-dessus de la BottomNav et de sa
+ * safe-area iOS). Au tap, il se déploie en éventail pour révéler les deux points
+ * d'entrée — « Ajouter une recette » (photo / saisie) et « Créer avec l'IA » —
+ * puis le « + » bascule en « × » pour refermer. Un voile capte les clics
+ * extérieurs ; Échap referme aussi.
+ */
+function AddRecipeFab() {
+  const [open, setOpen] = useState(false)
+  // Restitution du focus : à la fermeture clavier/voile, on rend la main au
+  // déclencheur ; à l'ouverture, on porte le focus sur la première action.
+  const declencheurRef = useRef<HTMLButtonElement>(null)
+  const premiereActionRef = useRef<HTMLAnchorElement>(null)
+
+  // Referme et rend le focus au déclencheur (Échap, voile) — gardé hors
+  // navigation (un clic sur une action change de page, le focus n'importe plus).
+  function fermer() {
+    setOpen(false)
+    declencheurRef.current?.focus()
+  }
+
+  // Échap referme l'éventail (cohérence clavier avec les autres surfaces).
+  useEffect(() => {
+    if (!open) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") fermer()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [open])
+
+  // À l'ouverture, on amène le focus sur la première action de l'éventail.
+  useEffect(() => {
+    if (open) premiereActionRef.current?.focus()
+  }, [open])
+
+  return (
+    <>
+      {/* Voile assombri + léger flou : détache l'éventail du carnet de recettes
+          (sinon les vignettes derrière rendent l'ensemble brouillon). Un clic
+          dessus referme. Même teinte encre que les dialogs des listes. */}
+      {open && (
+        <button
+          type="button"
+          aria-hidden
+          tabIndex={-1}
+          onClick={fermer}
+          className="fixed inset-0 z-20 cursor-default bg-ink/55 backdrop-blur-[2px] motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150"
+        />
+      )}
+
+      <div className="fixed right-4 bottom-[calc(5rem+env(safe-area-inset-bottom))] z-30 flex flex-col items-end gap-3">
+        {/* Actions déployées (au-dessus du FAB), masquées au repos. */}
+        {open && (
+          <div className="flex flex-col items-end gap-2.5">
+            <FabAction
+              ref={premiereActionRef}
+              href="/recipes/new"
+              label="Ajouter une recette"
+              icon={Plus}
+              onNavigate={() => setOpen(false)}
+            />
+            <FabAction
+              href="/recipes/ai"
+              label="Créer avec l’IA"
+              icon={Sparkles}
+              variant="secondary"
+              onNavigate={() => setOpen(false)}
+            />
+          </div>
+        )}
+
+        {/* Le bouton principal : « + » au repos, « × » une fois déployé.
+            C'est une bascule (disclosure), pas un menu ARIA : les actions sont
+            de simples liens, donc `aria-expanded` seul, sans `aria-haspopup`. */}
+        <button
+          ref={declencheurRef}
+          type="button"
+          aria-expanded={open}
+          aria-label={open ? "Fermer le menu d’ajout" : "Ajouter une recette"}
+          onClick={() => setOpen((v) => !v)}
+          className="inline-flex size-12 items-center justify-center rounded-[12px] border-2 border-ink bg-brique text-paper-light shadow-riso-ink outline-none transition-[transform,box-shadow] focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-[2px] active:translate-y-[2px] active:shadow-none motion-reduce:transition-none"
+        >
+          <Plus
+            className={cn(
+              "size-5 transition-transform motion-reduce:transition-none",
+              open && "rotate-45",
+            )}
+            strokeWidth={2.5}
+            aria-hidden
+          />
+        </button>
+      </div>
+    </>
+  )
+}
+
+/**
+ * Une entrée de l'éventail : pastille pleine (icône) précédée d'un libellé sur
+ * une étiquette papier, l'ensemble étant un lien vers l'écran cible.
+ */
+const FabAction = forwardRef<
+  HTMLAnchorElement,
+  {
+    href: string
+    label: string
+    icon: typeof Plus
+    variant?: "primary" | "secondary"
+    onNavigate: () => void
+  }
+>(function FabAction(
+  { href, label, icon: Icon, variant = "primary", onNavigate },
+  ref,
+) {
+  return (
+    <Link
+      ref={ref}
+      href={href}
+      onClick={onNavigate}
+      className="group flex items-center gap-2.5 outline-none"
+    >
+      <span className="rounded-[8px] border-2 border-ink bg-paper px-3 py-1.5 font-mono text-[14px] font-bold uppercase tracking-tight text-ink shadow-riso-ink-sm">
+        {label}
+      </span>
+      <span
+        className={cn(
+          "inline-flex size-11 items-center justify-center rounded-[11px] border-2 border-ink shadow-riso-ink-sm transition-[transform,box-shadow] group-focus-visible:ring-2 group-focus-visible:ring-sauge group-focus-visible:ring-offset-2 group-focus-visible:ring-offset-paper group-active:translate-x-[2px] group-active:translate-y-[2px] group-active:shadow-none motion-reduce:transition-none",
+          variant === "primary"
+            ? "bg-brique text-paper-light"
+            : "bg-sauge text-ink",
+        )}
+      >
+        <Icon className="size-5" strokeWidth={2.5} aria-hidden />
+      </span>
+    </Link>
+  )
+})
 
 /* -------------------------------------------------------------------------- */
 /*  Filtres                                                                     */
@@ -293,10 +403,18 @@ function FilterChip({
 /*  Vignette de recette                                                         */
 /* -------------------------------------------------------------------------- */
 
+/** Largeur révélée par le swipe : une seule cible tactile de 64px (≥ 44px). */
+const SWIPE_REVEAL = 64
+
 /**
- * Vignette cliquable (§7.6) : visuel (photo ou marmite de repli), titre, méta
- * (durée · type · calories/portion) et jusqu'à trois étiquettes. Toute la carte
- * est un lien vers la fiche détaillée.
+ * Vignette cliquable (§7.6) : titre, méta (durée · type · calories/portion) et
+ * jusqu'à trois étiquettes. Toute la carte est un lien vers la fiche détaillée.
+ *
+ * Geste « glisser pour révéler » (mutualisé via {@link useSwipeReveal}, comme
+ * les tuiles de listes) : la carte glisse vers la gauche pour découvrir une
+ * corbeille. Au tap, un Dialog modal demande confirmation avant la suppression
+ * DÉFINITIVE de la recette (de la base). Pas de mode édition ici : juste
+ * supprimer. Le calque corbeille est focusable → pleinement accessible clavier.
  */
 function RecipeCard({ recipe }: { recipe: RecipeCardView }) {
   const duree = formatDuree(recipe.dureeMinutes)
@@ -304,71 +422,255 @@ function RecipeCard({ recipe }: { recipe: RecipeCardView }) {
   const tagsVisibles = recipe.tags.slice(0, 3)
   const tagsRestants = recipe.tags.length - tagsVisibles.length
 
+  // Confirmation de suppression : Dialog modal base-ui (focus trap + cohérence).
+  const [deleting, setDeleting] = useState(false)
+
+  const {
+    offset,
+    setOffset,
+    dragging,
+    didDragRef,
+    close: closeSwipe,
+    swipeHandlers,
+  } = useSwipeReveal({ revealWidth: SWIPE_REVEAL, enabled: !deleting })
+
   return (
-    <Link
-      href={`/recipes/${recipe.id}`}
-      className="flex gap-3 rounded-[12px] border-2 border-ink bg-paper-light p-2.5 text-ink shadow-riso-sauge outline-none transition-[transform,box-shadow] focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px active:shadow-none"
+    <div
+      className={cn(
+        // L'ombre riso vit sur le wrapper : `overflow-hidden` clippe la carte qui
+        // glisse (et les coins du calque) mais JAMAIS l'ombre décalée du wrapper.
+        "relative overflow-hidden rounded-[12px] shadow-riso-sauge",
+      )}
     >
-      {/* Visuel carré : photo si disponible, sinon repli « marmite » sauge. */}
-      <div className="relative size-20 shrink-0 overflow-hidden rounded-[8px] border-2 border-ink bg-sauge">
-        {recipe.photoUrl ? (
-          <Image
-            src={recipe.photoUrl}
-            alt=""
-            fill
-            unoptimized
-            className="object-cover"
-          />
-        ) : (
-          <span className="flex size-full items-center justify-center">
-            <ChefHat className="size-8 text-ink" strokeWidth={2} aria-hidden />
-          </span>
-        )}
+      {/* Calque d'action (Supprimer). Révélé au doigt/souris par le glissement,
+          ET accessible au clavier : le bouton est focusable et labellisé ;
+          recevoir le focus ouvre la carte, le perdre la referme. */}
+      <div
+        className="absolute inset-y-0 right-0 z-0 flex overflow-hidden rounded-r-[12px] border-y-2 border-r-2 border-ink"
+        onFocus={() => setOffset(-SWIPE_REVEAL)}
+        onBlur={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) closeSwipe()
+        }}
+      >
+        <button
+          type="button"
+          aria-label={`Supprimer la recette ${recipe.titre}`}
+          onClick={() => {
+            closeSwipe()
+            setDeleting(true)
+          }}
+          className="inline-flex w-16 items-center justify-center bg-brique text-paper-light outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-paper-light"
+        >
+          <Trash2 className="size-5" strokeWidth={2.5} aria-hidden />
+        </button>
       </div>
 
-      <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-        <h2 className="line-clamp-2 font-display text-[15px] uppercase leading-tight text-ink">
-          {recipe.titre}
-        </h2>
-
-        {/* Méta : type · durée · calories */}
-        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 font-mono text-[11px] text-ink-soft">
-          <span className="font-bold text-ink">
-            {LABELS_TYPE_PLAT[recipe.typePlat]}
-          </span>
-          {duree && (
-            <span className="inline-flex items-center gap-1">
-              <Clock className="size-3.5" strokeWidth={2.5} aria-hidden />
-              {duree}
-            </span>
+      {/* Carte au premier plan : glisse via translateX. `touch-pan-y` laisse le
+          scroll vertical au navigateur et nous réserve l'horizontale. */}
+      <div
+        className={cn(
+          "relative z-10 touch-pan-y select-none",
+          dragging
+            ? ""
+            : "transition-transform duration-200 ease-out motion-reduce:transition-none",
+        )}
+        style={{ transform: `translateX(${offset}px)` }}
+        {...swipeHandlers}
+        onClickCapture={(e) => {
+          // Click de fin de glissement : on l'avale (ni navigation ni fermeture)
+          // pour que la carte RESTE ouverte sur la corbeille.
+          if (didDragRef.current) {
+            e.preventDefault()
+            e.stopPropagation()
+            didDragRef.current = false
+            return
+          }
+          // Vrai tap sur une carte déjà ouverte : on referme au lieu de naviguer.
+          if (offset !== 0) {
+            e.preventDefault()
+            e.stopPropagation()
+            closeSwipe()
+          }
+        }}
+      >
+        <Link
+          href={`/recipes/${recipe.id}`}
+          className={cn(
+            "relative flex border-2 border-ink bg-paper-light p-2.5 text-ink outline-none transition-transform focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px",
+            // Une fois glissée, on carre le bord droit au contact du calque brique.
+            offset !== 0 || dragging
+              ? "rounded-l-[12px] rounded-r-none"
+              : "rounded-[12px]",
           )}
-          {recipe.caloriesParPortion !== null && (
-            <span className="inline-flex items-center gap-1">
-              <Flame className="size-3.5" strokeWidth={2.5} aria-hidden />
-              {recipe.caloriesParPortion} kcal/pers.
-            </span>
+        >
+          {/* Repère de découvrabilité : petite languette encre sur le bord droit,
+              qui signale que la carte se tire vers la gauche pour révéler la
+              corbeille. Cliquable (souris/tactile) → ouvre directement le calque,
+              pour qui ne devine pas le geste. aria-hidden + hors tabulation : le
+              clavier passe par le bouton Supprimer, déjà focusable. */}
+          {offset === 0 && (
+            <button
+              type="button"
+              aria-hidden
+              tabIndex={-1}
+              onClick={(e) => {
+                // Sur le lien : on intercepte pour ouvrir le calque sans naviguer.
+                e.preventDefault()
+                e.stopPropagation()
+                setOffset(-SWIPE_REVEAL)
+              }}
+              title="Afficher l’action (ou glisser la carte vers la gauche)"
+              className="absolute -right-0.5 top-1/2 z-10 inline-flex h-11 w-6 -translate-y-1/2 items-center justify-end outline-none"
+            >
+              <span aria-hidden className="block h-9 w-1.5 rounded-full bg-ink" />
+            </button>
           )}
-        </div>
 
-        {/* Étiquettes (Axe 2) */}
-        {tagsVisibles.length > 0 && (
-          <div className="mt-0.5 flex flex-wrap gap-1">
-            {tagsVisibles.map((tag) => (
-              <span
-                key={tag}
-                className="rounded-[6px] border-2 border-ink bg-paper px-1.5 py-0.5 text-[10px] font-medium text-ink"
-              >
-                {LABELS_TAG[tag]}
+          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+            <h2 className="line-clamp-2 font-display text-[15px] uppercase leading-tight text-ink">
+              {recipe.titre}
+            </h2>
+
+            {/* Méta : type · durée · calories */}
+            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 font-mono text-[11px] text-ink-soft">
+              <span className="font-bold text-ink">
+                {LABELS_TYPE_PLAT[recipe.typePlat]}
               </span>
-            ))}
-            {tagsRestants > 0 && (
-              <span className="rounded-[6px] border-2 border-dashed border-ink px-1.5 py-0.5 text-[10px] font-medium text-ink-soft">
-                +{tagsRestants}
-              </span>
+              {duree && (
+                <span className="inline-flex items-center gap-1">
+                  <Clock className="size-3.5" strokeWidth={2.5} aria-hidden />
+                  {duree}
+                </span>
+              )}
+              {recipe.caloriesParPortion !== null && (
+                <span className="inline-flex items-center gap-1">
+                  <Flame className="size-3.5" strokeWidth={2.5} aria-hidden />
+                  {recipe.caloriesParPortion} kcal/pers.
+                </span>
+              )}
+            </div>
+
+            {/* Étiquettes (Axe 2) */}
+            {tagsVisibles.length > 0 && (
+              <div className="mt-0.5 flex flex-wrap gap-1">
+                {tagsVisibles.map((tag) => (
+                  <span
+                    key={tag}
+                    className="rounded-[6px] border-2 border-ink bg-paper px-1.5 py-0.5 text-[10px] font-medium text-ink"
+                  >
+                    {LABELS_TAG[tag]}
+                  </span>
+                ))}
+                {tagsRestants > 0 && (
+                  <span className="rounded-[6px] border-2 border-dashed border-ink px-1.5 py-0.5 text-[10px] font-medium text-ink-soft">
+                    +{tagsRestants}
+                  </span>
+                )}
+              </div>
             )}
           </div>
-        )}
+        </Link>
       </div>
-    </Link>
+
+      <DeleteRecipeDialog
+        recipe={recipe}
+        open={deleting}
+        onOpenChange={setDeleting}
+      />
+    </div>
+  )
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Confirmation de suppression (Dialog modal)                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Dialog de confirmation avant suppression DÉFINITIVE d'une recette.
+ *
+ * Modal base-ui (mêmes codes que la suppression de liste) pour le piège de focus
+ * et la cohérence. « Annuler » reçoit le focus initial et fait office de bouton
+ * par défaut, afin d'éviter les suppressions par erreur ; « Supprimer » (variante
+ * brique) lance réellement `deleteRecipe`. À la réussite, la recette disparaît du
+ * carnet via revalidatePath, donc on referme simplement le Dialog.
+ */
+function DeleteRecipeDialog({
+  recipe,
+  open,
+  onOpenChange,
+}: {
+  recipe: RecipeCardView
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const [isPending, startTransition] = useTransition()
+  const [error, setError] = useState<string | undefined>()
+  const cancelRef = useRef<HTMLButtonElement>(null)
+
+  function confirmDelete() {
+    setError(undefined)
+    startTransition(async () => {
+      const result = await deleteRecipe(recipe.id)
+      if (!result.ok) setError(result.error)
+      else onOpenChange(false)
+    })
+  }
+
+  return (
+    <Dialog.Root
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) setError(undefined)
+        onOpenChange(next)
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Backdrop className="fixed inset-0 z-40 bg-ink/55 transition-opacity data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 motion-reduce:transition-none" />
+        <Dialog.Popup
+          initialFocus={cancelRef}
+          className={cn(
+            "fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-xs -translate-x-1/2 -translate-y-1/2",
+            "rounded-[16px] border-[2.5px] border-ink bg-paper p-5 shadow-riso-ink",
+            "transition-[opacity,transform] data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 motion-reduce:transition-none",
+          )}
+        >
+          <Dialog.Title className="font-display text-lg uppercase leading-tight text-ink">
+            Supprimer la recette ?
+          </Dialog.Title>
+          <Dialog.Description className="mt-2 text-[13px] leading-snug text-ink">
+            Êtes-vous sûr de vouloir supprimer la recette « {recipe.titre} » et
+            tous ses ingrédients&nbsp;? Cette action est définitive.
+          </Dialog.Description>
+
+          {error && (
+            <p
+              role="alert"
+              className="mt-3 rounded-[8px] border-2 border-brique bg-brique/10 px-2.5 py-1.5 text-[12px] font-medium leading-snug text-ink"
+            >
+              {error}
+            </p>
+          )}
+
+          <div className="mt-4 flex justify-end gap-2">
+            <RisoButton
+              ref={cancelRef}
+              variant="secondary"
+              disabled={isPending}
+              onClick={() => onOpenChange(false)}
+            >
+              Annuler
+            </RisoButton>
+            <RisoButton
+              variant="primary"
+              disabled={isPending}
+              aria-busy={isPending}
+              onClick={confirmDelete}
+            >
+              {isPending ? "…" : "Supprimer"}
+            </RisoButton>
+          </div>
+        </Dialog.Popup>
+      </Dialog.Portal>
+    </Dialog.Root>
   )
 }

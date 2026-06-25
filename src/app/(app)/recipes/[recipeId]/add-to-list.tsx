@@ -35,6 +35,9 @@ export function AddToShoppingList({
   nombrePersonnes,
   ingredientIds,
   totalIngredients,
+  modeSelection,
+  onDemarrerSelection,
+  onAnnulerSelection,
   onAjoute,
 }: {
   recipeId: string
@@ -46,6 +49,13 @@ export function AddToShoppingList({
   ingredientIds: string[]
   /** Nombre total d'ingrédients de la recette (pour le libellé du bouton). */
   totalIngredients: number
+  /** Mode sélection actif : les cases à cocher sont affichées sur la fiche. En
+   *  lecture seule, le bouton ne fait que démarrer la sélection. */
+  modeSelection: boolean
+  /** Premier clic « Ajouter à la liste » : ouvre la sélection des ingrédients. */
+  onDemarrerSelection: () => void
+  /** Abandon de la sélection en cours : retour à la lecture seule. */
+  onAnnulerSelection: () => void
   /** Appelé au premier ajout réussi : la fiche fige alors la sélection. */
   onAjoute?: () => void
 }) {
@@ -130,8 +140,17 @@ export function AddToShoppingList({
         </section>
       )}
 
-      {/* --- Menu d'ajout : sélecteur de liste, ou bouton (toujours déployé) - */}
-      {choixOuvert ? (
+      {/* --- En lecture seule : le bouton ne fait qu'ouvrir la sélection ------ */}
+      {!modeSelection ? (
+        <RisoButton
+          onClick={onDemarrerSelection}
+          className="h-12 w-full text-sm"
+        >
+          <ShoppingCart aria-hidden />
+          Ajouter à la liste de courses
+        </RisoButton>
+      ) : choixOuvert ? (
+        /* --- Sélecteur de liste cible -------------------------------------- */
         <section className="flex flex-col gap-3 rounded-[12px] border-2 border-ink bg-paper-light p-4 shadow-riso-sauge">
           <p className="font-mono text-[11px] font-bold uppercase tracking-wide text-ink-soft">
             Ajouter à quelle liste ?
@@ -159,19 +178,33 @@ export function AddToShoppingList({
           </RisoButton>
         </section>
       ) : (
-        <RisoButton
-          onClick={() => {
-            // Une seule liste : on file directement dessus (le sélecteur n'aurait
-            // qu'un choix). Sinon on ouvre le sélecteur.
-            if (listes.length === 1) ajouter(listes[0].id)
-            else setChoixOuvert(true)
-          }}
-          disabled={pending || aucunSelectionne}
-          className="h-12 w-full text-sm"
-        >
-          <ShoppingCart aria-hidden />
-          {libelle}
-        </RisoButton>
+        /* --- Sélection en cours : on valide l'ajout ou on annule ----------- */
+        <>
+          <RisoButton
+            onClick={() => {
+              // Une seule liste : on file directement dessus (le sélecteur n'aurait
+              // qu'un choix). Sinon on ouvre le sélecteur.
+              if (listes.length === 1) ajouter(listes[0].id)
+              else setChoixOuvert(true)
+            }}
+            disabled={pending || aucunSelectionne}
+            className="h-12 w-full text-sm"
+          >
+            <ShoppingCart aria-hidden />
+            {libelle}
+          </RisoButton>
+          {/* Tant qu'aucun ajout n'a abouti, on peut abandonner la sélection. */}
+          {!dernier && (
+            <RisoButton
+              variant="ghost"
+              onClick={onAnnulerSelection}
+              disabled={pending}
+              className="h-10 w-full text-[11px]"
+            >
+              Annuler
+            </RisoButton>
+          )}
+        </>
       )}
       {erreur && <FormFeedback error={erreur} />}
     </div>

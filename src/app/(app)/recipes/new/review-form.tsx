@@ -19,7 +19,11 @@ import {
 } from "@/lib/recipes/extraction"
 import { LABELS_TYPE_PLAT, LABELS_TAG, LABELS_UNITE } from "@/lib/recipes/labels"
 
-import { createRecipe, type RecipeIngredientInput } from "../actions"
+import {
+  createRecipe,
+  updateRecipe,
+  type RecipeIngredientInput,
+} from "../actions"
 
 /**
  * Écran de relecture éditable (PRD_recettes §7.5) — ÉTAPE CENTRALE, non
@@ -78,12 +82,19 @@ export function ReviewForm({
   onSaved,
   source = "photo",
   suggestions = [],
+  recipeId,
 }: {
   recette: RecetteExtraite
   /** Aperçus mémoire des photos (URL.createObjectURL), le temps de la relecture. */
   photoPreviewUrls: string[]
   onCancel: () => void
   onSaved: (recipeId: string) => void
+  /**
+   * Présent ⇒ mode ÉDITION d'une recette existante (Option A) : « Enregistrer »
+   * appelle {@link updateRecipe} au lieu de {@link createRecipe}. Absent ⇒ mode
+   * création (flux d'ajout §7.5).
+   */
+  recipeId?: string
   /**
    * Origine de la recette enregistrée (§4) : `'photo'` (extraction, défaut),
    * `'manuelle'` ou `'ia'` (mode « Créer / Améliorer », §9.3). Transmis tel quel
@@ -124,6 +135,8 @@ export function ReviewForm({
 
   const [error, setError] = useState<string | undefined>()
   const [isPending, startTransition] = useTransition()
+
+  const isEdit = recipeId !== undefined
 
   function toggleTag(tag: Tag) {
     setTags((prev) => {
@@ -180,21 +193,27 @@ export function ReviewForm({
 
     const etapesInput = etapes.map((row) => row.texte.trim()).filter(Boolean)
 
+    const payload = {
+      titre: titre.trim(),
+      dureeMinutes: strToNum(duree),
+      typePlat,
+      tags: [...tags],
+      nombrePersonnes: strToNum(personnes) ?? 4,
+      caloriesParPortion: strToNum(calories),
+      proteinesG: strToNum(proteines),
+      glucidesG: strToNum(glucides),
+      lipidesG: strToNum(lipides),
+      ingredients: ingredientsInput,
+      etapes: etapesInput,
+      source,
+    }
+
     startTransition(async () => {
-      const result = await createRecipe({
-        titre: titre.trim(),
-        dureeMinutes: strToNum(duree),
-        typePlat,
-        tags: [...tags],
-        nombrePersonnes: strToNum(personnes) ?? 4,
-        caloriesParPortion: strToNum(calories),
-        proteinesG: strToNum(proteines),
-        glucidesG: strToNum(glucides),
-        lipidesG: strToNum(lipides),
-        ingredients: ingredientsInput,
-        etapes: etapesInput,
-        source,
-      })
+      // Édition (Option A) vs création : même charge utile, action distincte.
+      const result =
+        recipeId !== undefined
+          ? await updateRecipe(recipeId, payload)
+          : await createRecipe(payload)
       if (!result.ok) {
         setError(result.error)
         return
@@ -208,12 +227,14 @@ export function ReviewForm({
       {/* En-tête : aperçu photo + titre */}
       <header className="flex flex-col gap-4">
         <h1 className="font-display text-xl uppercase text-ink">
-          Relire & corriger
+          {isEdit ? "Modifier la recette" : "Relire & corriger"}
         </h1>
         <p className="-mt-2 text-[13px] leading-snug text-ink-soft">
-          {source === "ia"
-            ? "Voici la proposition de l’IA. Ajuste tout ce que tu veux avant d’enregistrer."
-            : "L’IA fait au mieux sur l’écriture manuscrite. Vérifie et corrige tout avant d’enregistrer."}
+          {isEdit
+            ? "Modifie ce que tu veux, puis enregistre tes changements."
+            : source === "ia"
+              ? "Voici la proposition de l’IA. Ajuste tout ce que tu veux avant d’enregistrer."
+              : "L’IA fait au mieux sur l’écriture manuscrite. Vérifie et corrige tout avant d’enregistrer."}
         </p>
 
         {/* Suggestions concrètes du mode créatif (§9.2) — affichage seul, jamais
@@ -566,7 +587,11 @@ export function ReviewForm({
           aria-busy={isPending}
           className="h-12 flex-1 text-sm"
         >
-          {isPending ? "Enregistrement…" : "Enregistrer"}
+          {isPending
+            ? "Enregistrement…"
+            : isEdit
+              ? "Enregistrer les modifications"
+              : "Enregistrer"}
         </RisoButton>
         <RisoButton
           variant="secondary"

@@ -57,6 +57,11 @@ export function RecipeServings({
   )
   const toutCoche = selection.size === ingredients.length && ingredients.length > 0
 
+  // Mode sélection : en simple consultation, les ingrédients sont en lecture
+  // seule (pas de cases ni de bouton « tout (dé)sélectionner »). On n'affiche
+  // ces commandes qu'après un clic sur « Ajouter à la liste de courses ».
+  const [modeSelection, setModeSelection] = useState(false)
+
   // Une fois un ajout effectué, la sélection se fige : plus de coche ni d'action
   // sur les ingrédients (la liste reflète exactement ce qui a été envoyé).
   const [verrouille, setVerrouille] = useState(false)
@@ -78,6 +83,12 @@ export function RecipeServings({
         ? new Set()
         : new Set(ingredients.map((ing) => ing.id)),
     )
+  }
+
+  // Sort du mode sélection : on rétablit « tout coché » pour repartir propre.
+  function annulerSelection() {
+    setModeSelection(false)
+    setSelection(new Set(ingredients.map((ing) => ing.id)))
   }
 
   return (
@@ -122,8 +133,9 @@ export function RecipeServings({
         ) : (
           <>
             {/* Sélection pour l'ajout à la liste (§8.1) : tout cocher / décocher.
-                Masqué une fois la sélection figée (après un ajout). */}
-            {!verrouille && (
+                Visible uniquement en mode sélection (après un clic sur « Ajouter
+                à la liste »), masqué une fois la sélection figée (après un ajout). */}
+            {modeSelection && !verrouille && (
               <button
                 type="button"
                 onClick={basculerTout}
@@ -144,6 +156,7 @@ export function RecipeServings({
                   recipeId={recipeId}
                   ing={ing}
                   ratio={ratio}
+                  afficherCase={modeSelection}
                   selectionne={selection.has(ing.id)}
                   onBasculer={() => basculer(ing.id)}
                   verrouille={verrouille}
@@ -162,6 +175,9 @@ export function RecipeServings({
         nombrePersonnes={personnes}
         ingredientIds={[...selection]}
         totalIngredients={ingredients.length}
+        modeSelection={modeSelection}
+        onDemarrerSelection={() => setModeSelection(true)}
+        onAnnulerSelection={annulerSelection}
         onAjoute={() => setVerrouille(true)}
       />
     </>
@@ -182,6 +198,7 @@ function IngredientRow({
   recipeId,
   ing,
   ratio,
+  afficherCase,
   selectionne,
   onBasculer,
   verrouille,
@@ -189,6 +206,8 @@ function IngredientRow({
   recipeId: string
   ing: IngredientView
   ratio: number
+  /** Affiche la case à cocher (mode sélection actif uniquement). */
+  afficherCase: boolean
   /** Coché ⇒ part dans la liste de courses à l'ajout (§8.1). */
   selectionne: boolean
   onBasculer: () => void
@@ -216,22 +235,25 @@ function IngredientRow({
   return (
     <li className="flex flex-col gap-1 rounded-[10px] border-2 border-ink bg-paper-light px-3 py-2">
       <div className="flex items-center gap-2">
-        {/* Case à cocher : inclure (ou non) cet ingrédient dans la liste (§8.1). */}
-        <button
-          type="button"
-          role="checkbox"
-          aria-checked={selectionne}
-          disabled={verrouille}
-          aria-label={`${selectionne ? "Retirer" : "Ajouter"} ${ing.nom} de la sélection`}
-          onClick={onBasculer}
-          className={cn(
-            "inline-flex size-7 shrink-0 items-center justify-center rounded-[6px] border-2 border-ink outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-1 focus-visible:ring-offset-paper-light active:translate-x-px active:translate-y-px disabled:cursor-default",
-            selectionne ? "bg-sauge text-ink" : "bg-paper text-transparent",
-            verrouille && !selectionne && "opacity-40",
-          )}
-        >
-          <Check className="size-4" strokeWidth={3} aria-hidden />
-        </button>
+        {/* Case à cocher : inclure (ou non) cet ingrédient dans la liste (§8.1).
+            Affichée seulement en mode sélection (sinon lecture seule). */}
+        {afficherCase && (
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={selectionne}
+            disabled={verrouille}
+            aria-label={`${selectionne ? "Retirer" : "Ajouter"} ${ing.nom} de la sélection`}
+            onClick={onBasculer}
+            className={cn(
+              "inline-flex size-7 shrink-0 items-center justify-center rounded-[6px] border-2 border-ink outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-1 focus-visible:ring-offset-paper-light active:translate-x-px active:translate-y-px disabled:cursor-default",
+              selectionne ? "bg-sauge text-ink" : "bg-paper text-transparent",
+              verrouille && !selectionne && "opacity-40",
+            )}
+          >
+            <Check className="size-4" strokeWidth={3} aria-hidden />
+          </button>
+        )}
         <span className="min-w-0 flex-1 text-[15px] font-medium text-ink">
           {ing.nom}
         </span>

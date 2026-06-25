@@ -95,27 +95,31 @@ function entierPositif(v: unknown, repli: number): number {
   return n !== null && n > 0 ? Math.round(n) : repli
 }
 
-/**
- * Enregistre une recette + ses ingrédients (§7.5, bouton « Enregistrer »).
- *
- * Déroulé :
- *   1. auth + `couple_id` (RLS) ;
- *   2. validation défensive : titre non vide, `type_plat`/`tags`/`unite` bornés
- *      au jeu fermé (§10), nombres coercés ;
- *   3. insert `recipes` → on récupère l'`id` ;
- *   4. insert `recipe_ingredients` avec `ordre`, en RECALCULANT `nom_normalise`
- *      côté serveur via {@link normaliserNom} (règle d'or §5 — jamais la clé du
- *      client) ;
- *   5. si l'étape 4 échoue, suppression compensatoire de la recette (supabase-js
- *      n'offre pas de transaction multi-tables : on évite l'orphelin à la main,
- *      DELETE borné par `id` + `couple_id`, cf. garde-fou DELETE).
- */
-export async function createRecipe(
-  input: CreateRecipeInput,
-): Promise<ActionResult> {
-  const { supabase, userId, coupleId } = await requireMembership()
+/** Champs d'une recette après validation défensive (§10), prêts pour la BDD. */
+type RecetteValidee = {
+  titre: string
+  dureeMinutes: number | null
+  typePlat: TypePlat
+  tags: Tag[]
+  nombrePersonnes: number
+  caloriesParPortion: number | null
+  proteinesG: number | null
+  glucidesG: number | null
+  lipidesG: number | null
+  ingredients: { nom: string; quantite: number | null; unite: Unite | null }[]
+  etapes: string[]
+}
 
-  // --- 2. Validation défensive -------------------------------------------
+/**
+ * Validation défensive d'une recette envoyée par le client (§10), PARTAGÉE entre
+ * {@link createRecipe} et {@link updateRecipe}. Le serveur ne fait jamais
+ * confiance à l'UI : titre non vide, `type_plat`/`tags`/`unite` bornés au jeu
+ * fermé, nombres coercés. La clé `nom_normalise` n'est PAS calculée ici (règle
+ * d'or §5 : elle l'est au plus près de l'insert).
+ */
+function validerRecette(
+  input: CreateRecipeInput,
+): { ok: true; champs: RecetteValidee } | { ok: false; error: string } {
   const titre = input.titre?.trim()
   if (!titre) return { ok: false, error: "Donne un titre à la recette." }
 
@@ -131,11 +135,7 @@ export async function createRecipe(
       )
     : []
 
-  const source = (["photo", "manuelle", "ia"] as const).includes(input.source)
-    ? input.source
-    : "photo"
-
-  // Ingrédients : nom obligatoire, clé recalculée serveur (§5), unité bornée.
+  // Ingrédients : nom obligatoire, unité bornée (clé §5 recalculée à l'insert).
   const ingredients = (input.ingredients ?? [])
     .map((ing) => ({
       nom: ing.nom?.trim() ?? "",
@@ -152,23 +152,69 @@ export async function createRecipe(
     .map((e) => (typeof e === "string" ? e.trim() : ""))
     .filter(Boolean)
 
+  return {
+    ok: true,
+    champs: {
+      titre,
+      dureeMinutes: nombreOuNull(input.dureeMinutes),
+      typePlat,
+      tags,
+      nombrePersonnes: entierPositif(input.nombrePersonnes, 4),
+      caloriesParPortion: nombreOuNull(input.caloriesParPortion),
+      proteinesG: nombreOuNull(input.proteinesG),
+      glucidesG: nombreOuNull(input.glucidesG),
+      lipidesG: nombreOuNull(input.lipidesG),
+      ingredients,
+      etapes,
+    },
+  }
+}
+
+/**
+ * Enregistre une recette + ses ingrédients (§7.5, bouton « Enregistrer »).
+ *
+ * Déroulé :
+ *   1. auth + `couple_id` (RLS) ;
+ *   2. validation défensive partagée ({@link validerRecette}, §10) ;
+ *   3. insert `recipes` → on récupère l'`id` ;
+ *   4. insert `recipe_ingredients` avec `ordre`, en RECALCULANT `nom_normalise`
+ *      côté serveur via {@link normaliserNom} (règle d'or §5 — jamais la clé du
+ *      client) ;
+ *   5. si l'étape 4 échoue, suppression compensatoire de la recette (supabase-js
+ *      n'offre pas de transaction multi-tables : on évite l'orphelin à la main,
+ *      DELETE borné par `id` + `couple_id`, cf. garde-fou DELETE).
+ */
+export async function createRecipe(
+  input: CreateRecipeInput,
+): Promise<ActionResult> {
+  const { supabase, userId, coupleId } = await requireMembership()
+
+  // --- 2. Validation défensive (partagée) --------------------------------
+  const valid = validerRecette(input)
+  if (!valid.ok) return valid
+  const v = valid.champs
+
+  const source = (["photo", "manuelle", "ia"] as const).includes(input.source)
+    ? input.source
+    : "photo"
+
   // --- 3. Insert de la recette -------------------------------------------
   const { data: recipe, error: recipeErr } = await supabase
     .from("recipes")
     .insert({
       couple_id: coupleId,
       created_by: userId,
-      titre,
+      titre: v.titre,
       // Photos non conservées : `photo_url` reste null (sert juste à l'extraction).
-      duree_minutes: nombreOuNull(input.dureeMinutes),
-      type_plat: typePlat,
-      tags,
-      nombre_personnes: entierPositif(input.nombrePersonnes, 4),
-      calories_par_portion: nombreOuNull(input.caloriesParPortion),
-      proteines_g: nombreOuNull(input.proteinesG),
-      glucides_g: nombreOuNull(input.glucidesG),
-      lipides_g: nombreOuNull(input.lipidesG),
-      etapes,
+      duree_minutes: v.dureeMinutes,
+      type_plat: v.typePlat,
+      tags: v.tags,
+      nombre_personnes: v.nombrePersonnes,
+      calories_par_portion: v.caloriesParPortion,
+      proteines_g: v.proteinesG,
+      glucides_g: v.glucidesG,
+      lipides_g: v.lipidesG,
+      etapes: v.etapes,
       source,
     })
     .select("id")
@@ -179,8 +225,8 @@ export async function createRecipe(
   }
 
   // --- 4. Insert des ingrédients (clé §5 recalculée serveur) --------------
-  if (ingredients.length > 0) {
-    const rows = ingredients.map((ing, index) => ({
+  if (v.ingredients.length > 0) {
+    const rows = v.ingredients.map((ing, index) => ({
       recipe_id: recipe.id,
       nom_affiche: ing.nom,
       nom_normalise: normaliserNom(ing.nom), // règle d'or §5
@@ -209,6 +255,164 @@ export async function createRecipe(
 
   revalidatePath("/recipes")
   return { ok: true, recipeId: recipe.id }
+}
+
+/**
+ * Met à jour une recette existante du carnet + remplace son bloc d'ingrédients
+ * (édition manuelle, Option A). Réutilise le MÊME écran de relecture que la
+ * création (§7.5).
+ *
+ * Déroulé :
+ *   1. auth + `couple_id` (RLS) ;
+ *   2. validation défensive partagée ({@link validerRecette}, §10) ;
+ *   3. garde-fou : la recette doit appartenir au couple courant (on borne le
+ *      `recipeId` reçu par `id` + `couple_id`, en plus de la RLS) ;
+ *   4. UPDATE des champs de la recette (borné `id` + `couple_id`). On NE touche
+ *      ni à `source` ni à `notes` : ce sont des données que la fiche d'édition ne
+ *      gère pas, on les préserve ;
+ *   5. remplacement du bloc d'ingrédients. supabase-js n'a pas de transaction
+ *      multi-lignes : on insère les NOUVEAUX d'abord (clé §5 recalculée serveur),
+ *      PUIS on supprime les anciens par leur `id` (garde-fou DELETE). Cet ordre
+ *      garantit qu'à aucun instant la recette ne se retrouve sans ingrédients.
+ */
+export async function updateRecipe(
+  recipeId: string,
+  input: CreateRecipeInput,
+): Promise<ActionResult> {
+  const { supabase, coupleId } = await requireMembership()
+
+  // --- 2. Validation défensive (partagée) --------------------------------
+  const valid = validerRecette(input)
+  if (!valid.ok) return valid
+  const v = valid.champs
+
+  // --- 3. Garde-fou : la recette appartient bien au couple courant -------
+  const { data: existing } = await supabase
+    .from("recipes")
+    .select("id")
+    .eq("id", recipeId)
+    .eq("couple_id", coupleId)
+    .maybeSingle()
+  if (!existing) return { ok: false, error: "Recette introuvable." }
+
+  // --- 4. UPDATE des champs (source & notes préservés) -------------------
+  const { error: updErr } = await supabase
+    .from("recipes")
+    .update({
+      titre: v.titre,
+      duree_minutes: v.dureeMinutes,
+      type_plat: v.typePlat,
+      tags: v.tags,
+      nombre_personnes: v.nombrePersonnes,
+      calories_par_portion: v.caloriesParPortion,
+      proteines_g: v.proteinesG,
+      glucides_g: v.glucidesG,
+      lipides_g: v.lipidesG,
+      etapes: v.etapes,
+    })
+    .eq("id", recipeId)
+    .eq("couple_id", coupleId)
+
+  if (updErr) {
+    return { ok: false, error: "Impossible d’enregistrer la recette. Réessaie." }
+  }
+
+  // --- 5. Remplacement du bloc d'ingrédients (insert nouveaux → delete anciens)
+  const { data: anciens } = await supabase
+    .from("recipe_ingredients")
+    .select("id")
+    .eq("recipe_id", recipeId)
+
+  if (v.ingredients.length > 0) {
+    const rows = v.ingredients.map((ing, index) => ({
+      recipe_id: recipeId,
+      nom_affiche: ing.nom,
+      nom_normalise: normaliserNom(ing.nom), // règle d'or §5
+      quantite: ing.quantite,
+      unite: ing.unite,
+      ordre: index,
+    }))
+
+    const { error: insErr } = await supabase
+      .from("recipe_ingredients")
+      .insert(rows)
+    if (insErr) {
+      // Les anciens sont intacts : la recette reste cohérente. On échoue net.
+      return {
+        ok: false,
+        error: "Impossible d’enregistrer les ingrédients. Réessaie.",
+      }
+    }
+  }
+
+  // Suppression des anciennes lignes, bornée par leurs `id` (garde-fou DELETE).
+  const anciensIds = (anciens ?? []).map((a) => a.id)
+  if (anciensIds.length > 0) {
+    const { error: delErr } = await supabase
+      .from("recipe_ingredients")
+      .delete()
+      .in("id", anciensIds)
+    if (delErr) {
+      // Les nouveaux ingrédients sont déjà en place : on signale l'incohérence
+      // transitoire (doublons) plutôt que de la masquer.
+      return {
+        ok: false,
+        error:
+          "Recette mise à jour, mais le nettoyage des anciens ingrédients a échoué. Réessaie.",
+      }
+    }
+  }
+
+  revalidatePath("/recipes")
+  revalidatePath(`/recipes/${recipeId}`)
+  return { ok: true, recipeId }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Suppression d'une recette du carnet                                         */
+/* -------------------------------------------------------------------------- */
+
+/** Résultat d'une suppression (pas d'`id` à renvoyer, cf. deleteList). */
+export type DeleteRecipeResult = { ok: true } | { ok: false; error: string }
+
+/**
+ * Supprime définitivement une recette du carnet (et ses ingrédients).
+ *
+ * Déroulé :
+ *   1. auth + `couple_id` (RLS) ;
+ *   2. garde-fou : la recette doit appartenir au couple courant (on borne le
+ *      `recipeId` reçu du client par `id` + `couple_id`, en plus de la RLS — cf.
+ *      garde-fou DELETE : jamais de DELETE sans filtre couple_id/id) ;
+ *   3. DELETE de la recette ; les `recipe_ingredients` partent atomiquement par
+ *      la FK `ON DELETE CASCADE` (cf. migration v3), dans la même transaction.
+ */
+export async function deleteRecipe(
+  recipeId: string,
+): Promise<DeleteRecipeResult> {
+  const { supabase, coupleId } = await requireMembership()
+
+  // Garde-fou : la recette doit appartenir au couple courant.
+  const { data: recipe } = await supabase
+    .from("recipes")
+    .select("id")
+    .eq("id", recipeId)
+    .eq("couple_id", coupleId)
+    .maybeSingle()
+
+  if (!recipe) return { ok: false, error: "Recette introuvable." }
+
+  const { error } = await supabase
+    .from("recipes")
+    .delete()
+    .eq("id", recipeId)
+    .eq("couple_id", coupleId)
+
+  if (error) {
+    return { ok: false, error: "Suppression impossible. Réessaie." }
+  }
+
+  revalidatePath("/recipes")
+  return { ok: true }
 }
 
 /* -------------------------------------------------------------------------- */

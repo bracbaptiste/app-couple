@@ -1,6 +1,5 @@
 import Link from "next/link"
-import Image from "next/image"
-import { ArrowLeft, ChefHat, Clock, Users, Flame, Sparkles } from "lucide-react"
+import { ArrowLeft, Clock, Users, Flame, Sparkles, Pencil } from "lucide-react"
 import { notFound, redirect } from "next/navigation"
 
 import { createClient } from "@/lib/supabase/server"
@@ -43,7 +42,7 @@ export default async function RecipeDetailPage({
   const { data: recipe } = await supabase
     .from("recipes")
     .select(
-      "id, titre, duree_minutes, type_plat, tags, nombre_personnes, calories_par_portion, proteines_g, glucides_g, lipides_g, etapes, notes, photo_url",
+      "id, titre, duree_minutes, type_plat, tags, nombre_personnes, calories_par_portion, proteines_g, glucides_g, lipides_g, etapes, notes",
     )
     .eq("id", recipeId)
     .eq("couple_id", profile.couple_id)
@@ -109,21 +108,6 @@ export default async function RecipeDetailPage({
         <ArrowLeft className="size-4" strokeWidth={2.5} aria-hidden />
         Recettes
       </Link>
-
-      {/* Visuel : photo si disponible, sinon bandeau « marmite » sauge. */}
-      <div className="relative mt-1 flex h-44 w-full items-center justify-center overflow-hidden rounded-[12px] border-2 border-ink bg-sauge shadow-riso-sauge">
-        {recipe.photo_url ? (
-          <Image
-            src={recipe.photo_url}
-            alt=""
-            fill
-            unoptimized
-            className="object-cover"
-          />
-        ) : (
-          <ChefHat className="size-14 text-ink" strokeWidth={1.5} aria-hidden />
-        )}
-      </div>
 
       <h1 className="mt-4 font-display text-xl uppercase leading-tight text-ink">
         {recipe.titre}
@@ -225,12 +209,23 @@ export default async function RecipeDetailPage({
         </section>
       )}
 
+      {/* Modifier à la main (Option A) — édite la recette en place, sans IA. */}
+      <Link
+        href={`/recipes/${recipe.id}/edit`}
+        className={cn(
+          risoButtonVariants({ variant: "secondary" }),
+          "mt-6 h-12 w-full text-sm",
+        )}
+      >
+        <Pencil aria-hidden /> Modifier la recette
+      </Link>
+
       {/* Améliorer avec l'IA (§9.1) — crée une nouvelle version, l'originale reste. */}
       <Link
         href={`/recipes/${recipe.id}/improve`}
         className={cn(
           risoButtonVariants({ variant: "secondary" }),
-          "mt-6 h-12 w-full text-sm",
+          "mt-3 h-12 w-full text-sm",
         )}
       >
         <Sparkles aria-hidden /> Améliorer avec l’IA

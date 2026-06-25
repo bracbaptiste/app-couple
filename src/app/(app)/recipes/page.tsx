@@ -10,7 +10,7 @@ import { RecipesBrowser, type RecipeCardView } from "./recipes-client"
  * Carnet de recettes (/recipes) — liste filtrable (PRD_recettes §7.6).
  *
  * Server Component (sous RLS — on ne voit que les recettes de son couple) : on
- * charge les colonnes nécessaires aux vignettes (photo, titre, durée, type,
+ * charge les colonnes nécessaires aux vignettes (titre, durée, type,
  * étiquettes, calories/portion), triées de la plus récente à la plus ancienne.
  * La recherche par titre et les filtres (Axe 1 type de plat, Axe 2 étiquettes,
  * §10) vivent côté client (`./recipes-client.tsx`). La fiche détaillée est une
@@ -26,7 +26,7 @@ export default async function RecipesPage() {
   const { data } = await supabase
     .from("recipes")
     .select(
-      "id, titre, duree_minutes, type_plat, tags, calories_par_portion, photo_url",
+      "id, titre, duree_minutes, type_plat, tags, calories_par_portion",
     )
     .eq("couple_id", profile.couple_id)
     .order("created_at", { ascending: false })
@@ -44,7 +44,6 @@ export default async function RecipesPage() {
       ? r.tags.filter((t): t is Tag => (TAGS as readonly string[]).includes(t))
       : [],
     caloriesParPortion: r.calories_par_portion,
-    photoUrl: r.photo_url,
   }))
 
   return (
