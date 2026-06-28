@@ -421,6 +421,7 @@ export type Database = {
       tasks: {
         Row: {
           added_by: string | null
+          assigned_to: string | null
           created_at: string | null
           done_at: string | null
           done_by: string | null
@@ -430,10 +431,16 @@ export type Database = {
           list_id: string
           note: string | null
           position: number
+          recurrence_day_of_month: number | null
+          recurrence_end_date: string | null
+          recurrence_interval: number
+          recurrence_type: string
+          recurrence_weekday: number | null
           title: string
         }
         Insert: {
           added_by?: string | null
+          assigned_to?: string | null
           created_at?: string | null
           done_at?: string | null
           done_by?: string | null
@@ -443,10 +450,16 @@ export type Database = {
           list_id: string
           note?: string | null
           position?: number
+          recurrence_day_of_month?: number | null
+          recurrence_end_date?: string | null
+          recurrence_interval?: number
+          recurrence_type?: string
+          recurrence_weekday?: number | null
           title: string
         }
         Update: {
           added_by?: string | null
+          assigned_to?: string | null
           created_at?: string | null
           done_at?: string | null
           done_by?: string | null
@@ -456,12 +469,24 @@ export type Database = {
           list_id?: string
           note?: string | null
           position?: number
+          recurrence_day_of_month?: number | null
+          recurrence_end_date?: string | null
+          recurrence_interval?: number
+          recurrence_type?: string
+          recurrence_weekday?: number | null
           title?: string
         }
         Relationships: [
           {
             foreignKeyName: "tasks_added_by_fkey"
             columns: ["added_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tasks_assigned_to_fkey"
+            columns: ["assigned_to"]
             isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
@@ -497,7 +522,7 @@ export type Database = {
       }
       current_couple_id: { Args: never; Returns: string }
       delete_category_with_replacement: {
-        Args: { p_category_id: string; p_replacement_id?: string | null }
+        Args: { p_category_id: string; p_replacement_id?: string }
         Returns: Json
       }
       generate_invite_code: { Args: never; Returns: string }
