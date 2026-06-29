@@ -51,6 +51,8 @@ type TodoListViewProps = {
   isShared: boolean
   /** Propriétaire d'une liste personnelle (assigné par défaut), ou null. */
   ownerId: string | null
+  /** Toutes les to-do lists du couple (sélecteur de liste cible de l'ajout vocal). */
+  todoLists: { id: string; name: string }[]
   /** Tâches non faites de la liste (is_done = false), déjà filtrées côté serveur. */
   tasks: TaskView[]
   /**
@@ -138,6 +140,7 @@ export function TodoListView({
   currentMemberId,
   isShared,
   ownerId,
+  todoLists,
   tasks,
   doneTasks,
 }: TodoListViewProps) {
@@ -203,6 +206,49 @@ export function TodoListView({
       const result = await runMutation("addTask", {
         taskId,
         listId,
+        rawTitle: title,
+        dueDate: iso,
+        assignedTo: opts.assignedTo,
+        recurrence: opts.recurrence,
+      })
+      if (!result.ok) setError(result.error)
+    })
+  }
+
+  /**
+   * Ajout vocal : la tâche validée peut cibler une AUTRE liste que celle
+   * affichée (l'IA / l'utilisateur a choisi la liste). On insère par le même
+   * chemin (`addTask`, RLS) ; l'optimiste n'est appliqué que si la cible est la
+   * liste courante (sinon la tâche apparaîtra sur sa liste, pas ici).
+   */
+  function handleVoiceAdd(
+    targetListId: string,
+    title: string,
+    opts: { dueDate?: Date; assignedTo: string | null; recurrence: Recurrence },
+  ) {
+    setError(undefined)
+    const iso = opts.dueDate ? opts.dueDate.toISOString().slice(0, 10) : null
+    const taskId = crypto.randomUUID()
+    startAction(async () => {
+      if (targetListId === listId) {
+        apply({
+          kind: "add",
+          task: {
+            id: taskId,
+            title,
+            note: null,
+            dueDate: iso,
+            isDone: false,
+            addedBy: currentMemberId,
+            assignedTo: opts.assignedTo,
+            recurrence: opts.recurrence,
+            createdAt: new Date().toISOString(),
+          },
+        })
+      }
+      const result = await runMutation("addTask", {
+        taskId,
+        listId: targetListId,
         rawTitle: title,
         dueDate: iso,
         assignedTo: opts.assignedTo,
@@ -303,6 +349,9 @@ export function TodoListView({
           disabled={isPending}
           members={members}
           defaultAssignee={defaultAssignee}
+          lists={todoLists}
+          currentListId={listId}
+          onVoiceAdd={handleVoiceAdd}
         />
 
         {error && (

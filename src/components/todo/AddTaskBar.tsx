@@ -9,6 +9,7 @@ import { getDueLabel } from "@/lib/hooks/useTaskState"
 import { type Recurrence, NO_RECURRENCE } from "@/lib/tasks/recurrence"
 
 import { TaskOptionsFields } from "./TaskOptionsFields"
+import { VoiceAddTask } from "./VoiceAddTask"
 
 /** Membre du couple proposé comme assigné. */
 type AddTaskMember = { id: string; name: string; color: "sauge" | "brique" }
@@ -46,6 +47,12 @@ type AddTaskBarProps = {
   members: AddTaskMember[]
   /** Assigné par défaut à la création (null = non assigné). */
   defaultAssignee: string | null
+  /** Toutes les to-do lists du couple (sélecteur de liste cible de l'ajout vocal). */
+  lists: { id: string; name: string }[]
+  /** Liste affichée — liste cible par défaut de l'ajout vocal. */
+  currentListId: string
+  /** Ajoute une tâche par la voix sur la liste choisie (chemin d'insertion normal). */
+  onVoiceAdd: (listId: string, title: string, opts: AddTaskOptions) => void
 }
 
 const TITLE_MAX = 120
@@ -60,6 +67,9 @@ function AddTaskBar({
   disabled = false,
   members,
   defaultAssignee,
+  lists,
+  currentListId,
+  onVoiceAdd,
 }: AddTaskBarProps) {
   const [title, setTitle] = useState("")
   // Échéance au format « yyyy-mm-dd » (valeur du RisoDatePicker).
@@ -137,6 +147,16 @@ function AddTaskBar({
             </button>
           </span>
         )}
+
+        {/* Ajout vocal : micro → dictée native du clavier → écran de validation. */}
+        <VoiceAddTask
+          lists={lists}
+          currentListId={currentListId}
+          members={members}
+          defaultAssignee={defaultAssignee}
+          disabled={disabled}
+          onConfirm={onVoiceAdd}
+        />
 
         {/* Calendrier maison aux couleurs de l'appli (remplace le picker natif). */}
         <RisoDatePicker
