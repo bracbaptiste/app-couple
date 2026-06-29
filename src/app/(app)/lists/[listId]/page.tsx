@@ -72,7 +72,7 @@ export default async function ListDetailPage({
       supabase
         .from("tasks")
         .select(
-          "id, title, note, due_date, is_done, added_by, assigned_to, recurrence_type, recurrence_interval, recurrence_weekday, recurrence_day_of_month, created_at",
+          "id, title, note, due_date, is_done, added_by, assigned_to, recurrence_type, recurrence_interval, recurrence_weekday, recurrence_day_of_month, position, created_at",
         )
         .eq("list_id", listId)
         .eq("is_done", false)
@@ -80,7 +80,7 @@ export default async function ListDetailPage({
       supabase
         .from("tasks")
         .select(
-          "id, title, note, due_date, is_done, added_by, assigned_to, recurrence_type, recurrence_interval, recurrence_weekday, recurrence_day_of_month, created_at",
+          "id, title, note, due_date, is_done, added_by, assigned_to, recurrence_type, recurrence_interval, recurrence_weekday, recurrence_day_of_month, position, created_at",
         )
         .eq("list_id", listId)
         .eq("is_done", true)
@@ -121,6 +121,7 @@ export default async function ListDetailPage({
       recurrence_interval: number | null
       recurrence_weekday: number | null
       recurrence_day_of_month: number | null
+      position: number | null
       created_at: string | null
     }): TaskView => ({
       id: row.id,
@@ -131,6 +132,7 @@ export default async function ListDetailPage({
       addedBy: row.added_by,
       assignedTo: row.assigned_to,
       recurrence: recurrenceFromDb(row),
+      position: row.position ?? 0,
       createdAt: row.created_at ?? "",
     })
 

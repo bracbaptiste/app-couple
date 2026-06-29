@@ -6,13 +6,23 @@ import { useMemo, useState } from "react"
 
 import { AddTaskBar } from "./AddTaskBar"
 import { DonePanel } from "./DonePanel"
+import { TaskFilterBar } from "./TaskFilterBar"
 import { TaskItem } from "./TaskItem"
 import { useRealtimeTasks } from "@/lib/realtime"
 import { runMutation } from "@/lib/offline/mutation-queue"
 import { useOfflineCache } from "@/lib/offline/use-offline-cache"
 import { useOfflineOptimistic } from "@/lib/offline/use-offline-optimistic"
-import { sortPendingTasks } from "@/lib/utils/sortTasks"
 import { type Recurrence } from "@/lib/tasks/recurrence"
+import { parisTodayIso } from "@/lib/tasks/dueBucket"
+import {
+  filterByDue,
+  filterByPerson,
+  sortTasksBy,
+  type DueFilter,
+  type PersonFilter,
+  type SortKey,
+  type StatusFilter,
+} from "@/lib/tasks/task-controls"
 
 type Color = "sauge" | "brique"
 
@@ -36,6 +46,8 @@ export type TaskView = {
   assignedTo: string | null
   /** Règle de récurrence (type 'none' si la tâche ne se répète pas). */
   recurrence: Recurrence
+  /** Position pour l'ordre manuel (tri « Manuel »). */
+  position: number
   /** Date de création ISO — départage le tri des tâches sans échéance. */
   createdAt: string
 }
@@ -198,6 +210,7 @@ export function TodoListView({
       addedBy: currentMemberId,
       assignedTo: opts.assignedTo,
       recurrence: opts.recurrence,
+      position: 0,
       createdAt: new Date().toISOString(),
     }
     const action: OptimisticAction = { kind: "add", task: optimisticTask }
@@ -242,6 +255,7 @@ export function TodoListView({
             addedBy: currentMemberId,
             assignedTo: opts.assignedTo,
             recurrence: opts.recurrence,
+            position: 0,
             createdAt: new Date().toISOString(),
           },
         })
@@ -317,17 +331,48 @@ export function TodoListView({
     })
   }
 
+  // --- Tri & filtres (PRD §3.5), état client sur les tâches déjà chargées ---
+  // Par défaut : tri par échéance, aucun filtre (= comportement historique).
+  const [sort, setSort] = useState<SortKey>("due")
+  const [person, setPerson] = useState<PersonFilter>("all")
+  const [status, setStatus] = useState<StatusFilter>("all")
+  const [due, setDue] = useState<DueFilter>("all")
+
+  function resetFilters() {
+    setPerson("all")
+    setStatus("all")
+    setDue("all")
+  }
+
+  // Résout la couleur d'identité de l'assigné d'une tâche (pour le filtre et le
+  // tri « par personne »). Non assignée / inconnue → null.
+  const colorOf = useMemo(() => {
+    return (assignedTo: string | null) =>
+      assignedTo ? membersById.get(assignedTo)?.color ?? null : null
+  }, [membersById])
+
   // Reséparation à l'affichage : à faire (triées par urgence) et faites. Une
   // tâche fraîchement cochée reste dans la région « à faire » de `combined`, donc
   // remonte en tête de la section « Fait » (juste-faites d'abord).
-  const pending = useMemo(
-    () => sortPendingTasks(displayTasks.filter((t) => !t.isDone)),
-    [displayTasks],
-  )
+  //
+  // Le filtre « personne » s'applique aux deux sections ; le filtre « échéance »
+  // (nos rappels) ne concerne que les tâches à faire ; le tri ne porte que sur
+  // les tâches à faire (les faites restent en ordre « done_at » décroissant).
+  const today = parisTodayIso()
+  const pending = useMemo(() => {
+    let p = displayTasks.filter((t) => !t.isDone)
+    p = filterByPerson(p, person, colorOf)
+    p = filterByDue(p, due, today)
+    return sortTasksBy(p, sort, colorOf)
+  }, [displayTasks, person, due, today, sort, colorOf])
   const done = useMemo(
-    () => displayTasks.filter((t) => t.isDone),
-    [displayTasks],
+    () => filterByPerson(displayTasks.filter((t) => t.isDone), person, colorOf),
+    [displayTasks, person, colorOf],
   )
+
+  // Visibilité des sections selon le filtre de statut (« à faire » / « fait »).
+  const showPending = status !== "done"
+  const showDone = status !== "todo"
 
   return (
     <div className="flex flex-col">
@@ -363,13 +408,35 @@ export function TodoListView({
           </p>
         )}
 
-        {pending.length === 0 && done.length === 0 ? (
+        {/* Contrôles de tri & filtres — seulement s'il y a des tâches à trier. */}
+        {displayTasks.length > 0 && (
+          <TaskFilterBar
+            members={members}
+            sort={sort}
+            onSortChange={setSort}
+            person={person}
+            onPersonChange={setPerson}
+            status={status}
+            onStatusChange={setStatus}
+            due={due}
+            onDueChange={setDue}
+            onReset={resetFilters}
+          />
+        )}
+
+        {displayTasks.length === 0 ? (
           <p className="rounded-[10px] border-2 border-dashed border-ink bg-paper-light px-4 py-6 text-center text-sm text-ink-soft">
             Aucune tâche pour l’instant. Ajoute-en une ci-dessus.
           </p>
+        ) : (showPending ? pending.length : 0) +
+            (showDone ? done.length : 0) ===
+          0 ? (
+          <p className="rounded-[10px] border-2 border-dashed border-ink bg-paper-light px-4 py-6 text-center text-sm text-ink-soft">
+            Aucune tâche ne correspond à ces filtres.
+          </p>
         ) : (
           <>
-            {pending.length > 0 && (
+            {showPending && pending.length > 0 && (
               <ul className="flex flex-col gap-2">
                 {pending.map((task) => {
                   return (
@@ -398,14 +465,16 @@ export function TodoListView({
             )}
 
             {/* Section « Fait » repliable (§2.8) */}
-            <DonePanel
-              tasks={done}
-              membersById={membersById}
-              members={members}
-              onToggle={handleToggle}
-              onEdit={handleEdit}
-              onDelete={handleDelete}
-            />
+            {showDone && (
+              <DonePanel
+                tasks={done}
+                membersById={membersById}
+                members={members}
+                onToggle={handleToggle}
+                onEdit={handleEdit}
+                onDelete={handleDelete}
+              />
+            )}
           </>
         )}
       </div>
