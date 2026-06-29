@@ -194,7 +194,9 @@ export async function deleteCategory(
     "delete_category_with_replacement",
     {
       p_category_id: categoryId,
-      p_replacement_id: replacementId,
+      // L'arg RPC est optionnel (défaut null côté Postgres) : on omet plutôt
+      // que de passer `null`, pour coller au type généré `p_replacement_id?: string`.
+      p_replacement_id: replacementId ?? undefined,
     },
   )
 
