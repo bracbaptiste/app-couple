@@ -34,6 +34,7 @@ import {
   editTask,
   toggleTask,
 } from "@/app/(app)/lists/[listId]/task-actions"
+import { type Recurrence } from "@/lib/tasks/recurrence"
 import {
   queueAdd,
   queueAll,
@@ -74,6 +75,8 @@ export type MutationPayloads = {
     listId: string
     rawTitle: string
     dueDate: string | null
+    assignedTo: string | null
+    recurrence: Recurrence
   }
   editTask: {
     listId: string
@@ -81,6 +84,8 @@ export type MutationPayloads = {
     rawTitle: string
     note: string | null
     dueDate: string | null
+    assignedTo: string | null
+    recurrence: Recurrence
   }
   deleteTask: { listId: string; taskId: string }
 }
@@ -102,6 +107,8 @@ const HANDLERS: {
       listId: p.listId,
       rawTitle: p.rawTitle,
       dueDate: p.dueDate,
+      assignedTo: p.assignedTo,
+      recurrence: p.recurrence,
     }),
   editTask: (p) =>
     editTask({
@@ -110,6 +117,8 @@ const HANDLERS: {
       rawTitle: p.rawTitle,
       note: p.note,
       dueDate: p.dueDate,
+      assignedTo: p.assignedTo,
+      recurrence: p.recurrence,
     }),
   deleteTask: (p) => deleteTask(p.listId, p.taskId),
 }

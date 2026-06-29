@@ -12,6 +12,7 @@ import { runMutation } from "@/lib/offline/mutation-queue"
 import { useOfflineCache } from "@/lib/offline/use-offline-cache"
 import { useOfflineOptimistic } from "@/lib/offline/use-offline-optimistic"
 import { sortPendingTasks } from "@/lib/utils/sortTasks"
+import { type Recurrence } from "@/lib/tasks/recurrence"
 
 type Color = "sauge" | "brique"
 
@@ -31,6 +32,10 @@ export type TaskView = {
   dueDate: string | null
   isDone: boolean
   addedBy: string | null
+  /** Personne responsable de la tâche (id de profil), ou null si non assignée. */
+  assignedTo: string | null
+  /** Règle de récurrence (type 'none' si la tâche ne se répète pas). */
+  recurrence: Recurrence
   /** Date de création ISO — départage le tri des tâches sans échéance. */
   createdAt: string
 }
@@ -42,6 +47,10 @@ type TodoListViewProps = {
   members: TodoMemberView[]
   /** Id du profil courant — pour le marqueur d'une tâche ajoutée optimistement. */
   currentMemberId: string
+  /** Liste partagée (Maison) ou personnelle — pilote le défaut d'assignation. */
+  isShared: boolean
+  /** Propriétaire d'une liste personnelle (assigné par défaut), ou null. */
+  ownerId: string | null
   /** Tâches non faites de la liste (is_done = false), déjà filtrées côté serveur. */
   tasks: TaskView[]
   /**
@@ -67,6 +76,8 @@ type OptimisticAction =
       title: string
       note: string | null
       dueDate: string | null
+      assignedTo: string | null
+      recurrence: Recurrence
     }
   | { kind: "delete"; id: string }
 
@@ -97,6 +108,8 @@ function applyTaskAction(
               title: action.title,
               note: action.note,
               dueDate: action.dueDate,
+              assignedTo: action.assignedTo,
+              recurrence: action.recurrence,
             }
           : t,
       )
@@ -123,9 +136,14 @@ export function TodoListView({
   name,
   members,
   currentMemberId,
+  isShared,
+  ownerId,
   tasks,
   doneTasks,
 }: TodoListViewProps) {
+  // Assigné par défaut à la création (PRD §3.4) : non assigné si la liste est
+  // partagée (Maison), sinon le propriétaire de la liste personnelle.
+  const defaultAssignee = isShared ? null : ownerId
   // Temps réel : ajout / cochage / modif / suppression d'une tâche côté
   // partenaire (sur CETTE liste) rafraîchit l'écran sans refresh manuel.
   // `refresh()` ne met à jour que la donnée serveur de base ; l'optimiste local
@@ -159,9 +177,12 @@ export function TodoListView({
   } = useOfflineOptimistic(combined, applyTaskAction)
   const [error, setError] = useState<string | undefined>()
 
-  function handleAdd(title: string, dueDate?: Date) {
+  function handleAdd(
+    title: string,
+    opts: { dueDate?: Date; assignedTo: string | null; recurrence: Recurrence },
+  ) {
     setError(undefined)
-    const iso = dueDate ? dueDate.toISOString().slice(0, 10) : null
+    const iso = opts.dueDate ? opts.dueDate.toISOString().slice(0, 10) : null
     // UUID partagé par l'optimiste, la file hors ligne et la base. Un rejeu de
     // la création cible donc toujours la même ligne.
     const taskId = crypto.randomUUID()
@@ -172,6 +193,8 @@ export function TodoListView({
       dueDate: iso,
       isDone: false,
       addedBy: currentMemberId,
+      assignedTo: opts.assignedTo,
+      recurrence: opts.recurrence,
       createdAt: new Date().toISOString(),
     }
     const action: OptimisticAction = { kind: "add", task: optimisticTask }
@@ -182,6 +205,8 @@ export function TodoListView({
         listId,
         rawTitle: title,
         dueDate: iso,
+        assignedTo: opts.assignedTo,
+        recurrence: opts.recurrence,
       })
       if (!result.ok) setError(result.error)
     })
@@ -203,7 +228,13 @@ export function TodoListView({
 
   function handleEdit(
     taskId: string,
-    patch: { title: string; note: string | null; dueDate: string | null },
+    patch: {
+      title: string
+      note: string | null
+      dueDate: string | null
+      assignedTo: string | null
+      recurrence: Recurrence
+    },
   ) {
     setError(undefined)
     const action: OptimisticAction = {
@@ -212,6 +243,8 @@ export function TodoListView({
       title: patch.title,
       note: patch.note,
       dueDate: patch.dueDate,
+      assignedTo: patch.assignedTo,
+      recurrence: patch.recurrence,
     }
     startAction(async () => {
       apply(action)
@@ -221,6 +254,8 @@ export function TodoListView({
         rawTitle: patch.title,
         note: patch.note,
         dueDate: patch.dueDate,
+        assignedTo: patch.assignedTo,
+        recurrence: patch.recurrence,
       })
       if (!result.ok) setError(result.error)
     })
@@ -263,7 +298,12 @@ export function TodoListView({
       </div>
 
       <div className="flex flex-col gap-5">
-        <AddTaskBar onAdd={handleAdd} disabled={isPending} />
+        <AddTaskBar
+          onAdd={handleAdd}
+          disabled={isPending}
+          members={members}
+          defaultAssignee={defaultAssignee}
+        />
 
         {error && (
           <p
@@ -296,6 +336,9 @@ export function TodoListView({
                           ? membersById.get(task.addedBy) ?? null
                           : null
                       }
+                      members={members}
+                      assignedTo={task.assignedTo}
+                      recurrence={task.recurrence}
                       onToggle={handleToggle}
                       onEdit={handleEdit}
                       onDelete={handleDelete}
@@ -309,6 +352,7 @@ export function TodoListView({
             <DonePanel
               tasks={done}
               membersById={membersById}
+              members={members}
               onToggle={handleToggle}
               onEdit={handleEdit}
               onDelete={handleDelete}

@@ -1,6 +1,6 @@
 "use client"
 
-import { Pencil, Trash2, X } from "lucide-react"
+import { Pencil, Repeat, Trash2, X } from "lucide-react"
 import { useState } from "react"
 
 import { AddedByMarker } from "@/components/ui/added-by-marker"
@@ -11,8 +11,10 @@ import { RisoInput } from "@/components/ui/riso-input"
 import { cn } from "@/lib/utils"
 import { getDueLabel, getTaskState } from "@/lib/hooks/useTaskState"
 import { useSwipeReveal } from "@/lib/hooks/useSwipeReveal"
+import { type Recurrence, NO_RECURRENCE } from "@/lib/tasks/recurrence"
 
 import { DueBadge } from "./DueBadge"
+import { TaskOptionsFields } from "./TaskOptionsFields"
 
 /** Identité d'un membre du couple (pour le marqueur « ajouté par »). */
 type TaskMember = {
@@ -20,11 +22,20 @@ type TaskMember = {
   color: "sauge" | "brique"
 }
 
-/** Patch d'édition d'une tâche (intitulé · note · échéance). */
+/** Membre du couple avec son id (pour le sélecteur d'assigné). */
+type TaskAssigneeMember = {
+  id: string
+  name: string
+  color: "sauge" | "brique"
+}
+
+/** Patch d'édition d'une tâche (intitulé · note · échéance · assigné · récurrence). */
 type TaskEditPatch = {
   title: string
   note: string | null
   dueDate: string | null
+  assignedTo: string | null
+  recurrence: Recurrence
 }
 
 /**
@@ -58,6 +69,12 @@ type TaskItemProps = {
   isDone?: boolean
   /** Membre ayant ajouté la tâche, ou `null` si inconnu. */
   member?: TaskMember | null
+  /** Membres du couple, pour le sélecteur d'assigné (mode édition). */
+  members?: TaskAssigneeMember[]
+  /** Assigné courant (id de profil), ou `null` si non assignée. */
+  assignedTo?: string | null
+  /** Règle de récurrence (type 'none' si la tâche ne se répète pas). */
+  recurrence?: Recurrence
   /** Demande le (dé)cochage au parent (qui persiste en base). */
   onToggle: (id: string, next: boolean) => void
   /** Demande la modification au parent. Omis = pas d'action « modifier ». */
@@ -87,6 +104,9 @@ function TaskItem({
   dueDate,
   isDone = false,
   member,
+  members = [],
+  assignedTo = null,
+  recurrence = NO_RECURRENCE,
   onToggle,
   onEdit,
   onDelete,
@@ -103,6 +123,14 @@ function TaskItem({
   const [editTitle, setEditTitle] = useState(title)
   const [editNote, setEditNote] = useState(note ?? "")
   const [editDue, setEditDue] = useState(toDateInputValue(dueDate))
+  const [editAssignee, setEditAssignee] = useState<string | null>(assignedTo)
+  const [editRecurrence, setEditRecurrence] = useState<Recurrence>(recurrence)
+
+  // Assigné résolu pour la pastille de la ligne (mode lecture).
+  const assignee = assignedTo
+    ? members.find((m) => m.id === assignedTo) ?? null
+    : null
+  const isRecurring = recurrence.type !== "none"
 
   const canEdit = !!onEdit
   const canDelete = !!onDelete
@@ -129,6 +157,8 @@ function TaskItem({
     setEditTitle(title)
     setEditNote(note ?? "")
     setEditDue(toDateInputValue(dueDate))
+    setEditAssignee(assignedTo)
+    setEditRecurrence(recurrence)
     setMode("edit")
   }
 
@@ -140,6 +170,8 @@ function TaskItem({
       title: cleanTitle,
       note: cleanNote || null,
       dueDate: editDue || null,
+      assignedTo: editAssignee,
+      recurrence: editRecurrence,
     })
     setMode(null)
   }
@@ -268,6 +300,16 @@ function TaskItem({
               <RisoDatePicker value={editDue} onChange={setEditDue} size="sm" />
             </div>
 
+            {/* Assigné + récurrence (PRD §3.3, §3.4). */}
+            <TaskOptionsFields
+              members={members}
+              assignedTo={editAssignee}
+              onAssignedToChange={setEditAssignee}
+              recurrence={editRecurrence}
+              onRecurrenceChange={setEditRecurrence}
+              dueDate={editDue || null}
+            />
+
             <div className="flex gap-1.5">
               <RisoButton
                 size="sm"
@@ -342,6 +384,27 @@ function TaskItem({
                 </p>
               )}
             </div>
+
+            {/* Indicateur de récurrence (↻) si la tâche se répète (§3.3). */}
+            {isRecurring && (
+              <Repeat
+                className="size-3.5 shrink-0 text-ink-soft"
+                strokeWidth={2.5}
+                aria-label="Tâche récurrente"
+              />
+            )}
+
+            {/* Pastille de l'assigné (sauge / brique) — rien si non assignée. */}
+            {assignee && (
+              <span
+                aria-label={`Assignée à ${assignee.name}`}
+                title={`Assignée à ${assignee.name}`}
+                className={cn(
+                  "inline-block size-3 shrink-0 rounded-full border-[1.5px] border-ink",
+                  assignee.color === "sauge" ? "bg-sauge" : "bg-brique",
+                )}
+              />
+            )}
 
             {/* Échéance, si présente — masquée une fois la tâche faite (§2.6) */}
             {dueDate && !isDone && <DueBadge date={dueDate} />}

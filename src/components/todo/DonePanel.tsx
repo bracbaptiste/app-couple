@@ -6,6 +6,8 @@ import { useState } from "react"
 
 import { cn } from "@/lib/utils"
 
+import { type Recurrence } from "@/lib/tasks/recurrence"
+
 import { TaskItem } from "./TaskItem"
 import type { TaskView, TodoMemberView } from "./TodoListView"
 
@@ -29,12 +31,20 @@ type DonePanelProps = {
   tasks: TaskView[]
   /** Membres du couple, pour le marqueur « ajouté par ». */
   membersById: Map<string, TodoMemberView>
+  /** Membres du couple (liste), pour le sélecteur d'assigné en édition. */
+  members: TodoMemberView[]
   /** Décoche une tâche (la renvoie dans les tâches à faire). */
   onToggle: (id: string, next: boolean) => void
-  /** Modifie une tâche faite (intitulé · note · échéance) (optionnel). */
+  /** Modifie une tâche faite (intitulé · note · échéance · assigné · récurrence). */
   onEdit?: (
     id: string,
-    patch: { title: string; note: string | null; dueDate: string | null },
+    patch: {
+      title: string
+      note: string | null
+      dueDate: string | null
+      assignedTo: string | null
+      recurrence: Recurrence
+    },
   ) => void
   /** Supprime une tâche faite (optionnel). */
   onDelete?: (id: string) => void
@@ -43,6 +53,7 @@ type DonePanelProps = {
 export function DonePanel({
   tasks,
   membersById,
+  members,
   onToggle,
   onEdit,
   onDelete,
@@ -93,6 +104,9 @@ export function DonePanel({
                 member={
                   task.addedBy ? membersById.get(task.addedBy) ?? null : null
                 }
+                members={members}
+                assignedTo={task.assignedTo}
+                recurrence={task.recurrence}
                 onToggle={onToggle}
                 onEdit={onEdit}
                 onDelete={onDelete}

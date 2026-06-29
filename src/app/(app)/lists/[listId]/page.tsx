@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/server"
 import { requireAuth } from "@/lib/supabase/auth"
 import { purchaseArchiveCutoffIso } from "@/lib/purchase-window"
 import { parseQuantites } from "@/lib/recipes/fusion"
+import { recurrenceFromDb } from "@/lib/tasks/recurrence"
 
 import {
   ListDetail,
@@ -54,7 +55,7 @@ export default async function ListDetailPage({
 
   const { data: list, error: listError } = await supabase
     .from("lists")
-    .select("id, name, kind")
+    .select("id, name, kind, is_shared, owner_id")
     .eq("id", listId)
     .eq("couple_id", profile.couple_id)
     .maybeSingle()
@@ -70,13 +71,17 @@ export default async function ListDetailPage({
     const [tasksRes, doneRes, membersRes] = await Promise.all([
       supabase
         .from("tasks")
-        .select("id, title, note, due_date, is_done, added_by, created_at")
+        .select(
+          "id, title, note, due_date, is_done, added_by, assigned_to, recurrence_type, recurrence_interval, recurrence_weekday, recurrence_day_of_month, created_at",
+        )
         .eq("list_id", listId)
         .eq("is_done", false)
         .order("created_at", { ascending: true }),
       supabase
         .from("tasks")
-        .select("id, title, note, due_date, is_done, added_by, created_at")
+        .select(
+          "id, title, note, due_date, is_done, added_by, assigned_to, recurrence_type, recurrence_interval, recurrence_weekday, recurrence_day_of_month, created_at",
+        )
         .eq("list_id", listId)
         .eq("is_done", true)
         .order("done_at", { ascending: false })
@@ -98,6 +103,11 @@ export default async function ListDetailPage({
       due_date: string | null
       is_done: boolean
       added_by: string | null
+      assigned_to: string | null
+      recurrence_type: string | null
+      recurrence_interval: number | null
+      recurrence_weekday: number | null
+      recurrence_day_of_month: number | null
       created_at: string | null
     }): TaskView => ({
       id: row.id,
@@ -106,6 +116,8 @@ export default async function ListDetailPage({
       dueDate: row.due_date,
       isDone: row.is_done,
       addedBy: row.added_by,
+      assignedTo: row.assigned_to,
+      recurrence: recurrenceFromDb(row),
       createdAt: row.created_at ?? "",
     })
 
@@ -126,6 +138,8 @@ export default async function ListDetailPage({
           name={list.name}
           members={todoMembers}
           currentMemberId={profile.id}
+          isShared={list.is_shared}
+          ownerId={list.owner_id}
           tasks={tasks}
           doneTasks={doneTasks}
         />

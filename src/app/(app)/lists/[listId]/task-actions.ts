@@ -4,6 +4,12 @@ import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
 
 import { createClient } from "@/lib/supabase/server"
+import {
+  type Recurrence,
+  NO_RECURRENCE,
+  normalizeRecurrence,
+  recurrenceToDbColumns,
+} from "@/lib/tasks/recurrence"
 
 /** Client Supabase serveur typé (inféré du helper, comme dans actions.ts). */
 type ServerClient = Awaited<ReturnType<typeof createClient>>
@@ -63,6 +69,27 @@ async function assertTodoListOwned(
   return data?.kind === "todo"
 }
 
+/**
+ * Garde-fou « assigné » : on n'accepte un `assigned_to` que s'il désigne un
+ * profil du couple courant (l'UI ne propose que les deux membres, mais une
+ * Server Action est appelable directement). Toute autre valeur retombe sur
+ * `null` (non assigné), jamais sur le profil d'un autre couple.
+ */
+async function sanitizeAssignee(
+  supabase: ServerClient,
+  assignedTo: string | null | undefined,
+  coupleId: string,
+): Promise<string | null> {
+  if (!assignedTo) return null
+  const { data } = await supabase
+    .from("profiles")
+    .select("id")
+    .eq("id", assignedTo)
+    .eq("couple_id", coupleId)
+    .maybeSingle()
+  return data ? assignedTo : null
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Ajout d'une tâche                                                          */
 /* -------------------------------------------------------------------------- */
@@ -74,8 +101,12 @@ export type AddTaskInput = {
   listId: string
   /** Intitulé brut saisi (sera borné). */
   rawTitle: string
-  /** Échéance optionnelle (ISO « yyyy-mm-dd »). Non câblée pour l'instant. */
+  /** Échéance optionnelle (ISO « yyyy-mm-dd »). */
   dueDate?: string | null
+  /** Assigné (id de profil du couple) ou null (non assigné / partagé). */
+  assignedTo?: string | null
+  /** Règle de récurrence (défaut : aucune). */
+  recurrence?: Recurrence | null
 }
 
 /** Ajoute une tâche (non faite) à une to-do list, attribuée à l'utilisateur. */
@@ -89,12 +120,17 @@ export async function addTask(input: AddTaskInput): Promise<ActionResult> {
     return { ok: false, error: "Liste introuvable." }
   }
 
+  const assignedTo = await sanitizeAssignee(supabase, input.assignedTo, coupleId)
+  const recurrence = normalizeRecurrence(input.recurrence ?? NO_RECURRENCE)
+
   const { error } = await supabase.from("tasks").insert({
     id: input.taskId,
     list_id: input.listId,
     title,
     due_date: input.dueDate ?? null,
     added_by: userId,
+    assigned_to: assignedTo,
+    ...recurrenceToDbColumns(recurrence),
   })
 
   if (error) {
@@ -124,9 +160,13 @@ export type EditTaskInput = {
   note?: string | null
   /** Échéance « yyyy-mm-dd » | null (null → échéance retirée). */
   dueDate?: string | null
+  /** Assigné (id de profil du couple) ou null (non assigné / partagé). */
+  assignedTo?: string | null
+  /** Règle de récurrence (défaut : aucune). */
+  recurrence?: Recurrence | null
 }
 
-/** Modifie l'intitulé, la note et/ou l'échéance d'une tâche. */
+/** Modifie l'intitulé, la note, l'échéance, l'assigné et/ou la récurrence d'une tâche. */
 export async function editTask(input: EditTaskInput): Promise<ActionResult> {
   const title = clamp(input.rawTitle, TITLE_MAX)
   if (!title) return { ok: false, error: "Entre l’intitulé d’une tâche." }
@@ -139,12 +179,17 @@ export async function editTask(input: EditTaskInput): Promise<ActionResult> {
     return { ok: false, error: "Liste introuvable." }
   }
 
+  const assignedTo = await sanitizeAssignee(supabase, input.assignedTo, coupleId)
+  const recurrence = normalizeRecurrence(input.recurrence ?? NO_RECURRENCE)
+
   const { error } = await supabase
     .from("tasks")
     .update({
       title,
       note: noteClean || null,
       due_date: input.dueDate ?? null,
+      assigned_to: assignedTo,
+      ...recurrenceToDbColumns(recurrence),
     })
     .eq("id", input.taskId)
     .eq("list_id", input.listId)
