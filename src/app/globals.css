@@ -151,3 +151,30 @@
     transform: translateY(0.6px);
   }
 }
+
+/*
+  Éventail du Cerveau — éclatement en étoile des 5 jetons (PRD V4 §4.3).
+  Chaque jeton est ancré sur le centre du cerveau (left/top 50 %) ; son `transform`
+  (centrage translate(-50%,-50%) + fusée vers l'arc + désaxage + scale), son
+  opacité et son délai de stagger sont calculés INLINE côté React (brain-button.tsx)
+  pour rester fiables à travers Turbopack + Tailwind v4. Ici on ne porte que le
+  positionnement de base et le timing du vol « ressort ».
+*/
+.brain-fan-chip {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+}
+
+/*
+  Vol « ressort » < 300 ms avec léger dépassement — uniquement si l'utilisateur
+  n'a pas demandé la réduction des animations. En mode réduit : aucune transition,
+  les jetons apparaissent / disparaissent simplement à leur position finale (§4.3).
+*/
+@media (prefers-reduced-motion: no-preference) {
+  .brain-fan-chip {
+    transition-property: transform, opacity;
+    transition-duration: 220ms, 160ms;
+    transition-timing-function: cubic-bezier(0.34, 1.5, 0.5, 1), ease-out;
+  }
+}
