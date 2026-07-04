@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { Dialog } from "@base-ui/react/dialog"
-import { Pencil, Plus, Trash2 } from "lucide-react"
+import { Pencil, Trash2 } from "lucide-react"
 import { useEffect, useRef, useState, useTransition } from "react"
 
 import { RisoButton } from "@/components/ui/riso-button"
@@ -10,6 +10,7 @@ import { RisoCard } from "@/components/ui/riso-card"
 import { RisoInput } from "@/components/ui/riso-input"
 import { SectionMarker } from "@/components/lists/SectionMarker"
 import { ListLogo } from "@/components/shared/ListLogo"
+import { GhostTile } from "@/components/shared/ghost-tile"
 import { NewListSheet } from "@/components/lists/NewListSheet"
 import { useRealtimeLists } from "@/lib/realtime"
 import { useOfflineCache } from "@/lib/offline/use-offline-cache"
@@ -73,7 +74,7 @@ export function ListsManager({
   // Cache de lecture (fondation hors ligne) : on garde la dernière grille connue.
   useOfflineCache(`${coupleId}:lists`, lists)
 
-  // Le bouton « + » ouvre le sheet de création (PRD_V2 §2.3).
+  // La tuile fantôme (sous la collection) ouvre le sheet de création (§4.6).
   const [creating, setCreating] = useState(false)
 
   // Regroupement par type pour le hub V2 (l'ordre interne — par position — est
@@ -93,19 +94,6 @@ export function ListsManager({
         <h1 className="font-display text-xl uppercase text-ink">Listes</h1>
       </div>
 
-      {/* FAB « Nouvelle liste » : ancré en bas à droite, à portée du pouce en
-          usage à une main, au-dessus de la BottomNav (sticky, z-40) et de sa
-          safe-area iOS. Style riso : carré 56px, ombre décalée encre. */}
-      <button
-        type="button"
-        aria-haspopup="dialog"
-        aria-label="Nouvelle liste"
-        onClick={() => setCreating(true)}
-        className="fixed right-4 bottom-[calc(5rem+env(safe-area-inset-bottom))] z-30 inline-flex size-12 items-center justify-center rounded-[12px] border-2 border-ink bg-brique text-paper-light shadow-riso-ink outline-none transition-[transform,box-shadow] focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-[2px] active:translate-y-[2px] active:shadow-none motion-reduce:transition-none"
-      >
-        <Plus className="size-5" strokeWidth={2.5} aria-hidden />
-      </button>
-
       <NewListSheet
         open={creating}
         onOpenChange={setCreating}
@@ -115,8 +103,8 @@ export function ListsManager({
       {lists.length === 0 ? (
         <RisoCard shadow="sauge">
           <p className="text-sm text-ink-soft">
-            Aucune liste pour l’instant. Crée ta première liste de courses
-            ci-dessus.
+            Aucune liste pour l’instant. Crée ta première liste de courses avec la
+            tuile en pointillés ci-dessous.
           </p>
         </RisoCard>
       ) : (
@@ -135,6 +123,10 @@ export function ListsManager({
           )}
         </>
       )}
+
+      {/* Tuile fantôme (§4.6) : le geste d'ajout, SOUS la collection. Remplace le
+          FAB « + » supprimé ; ouvre le même Sheet « Nouvelle liste ». */}
+      <GhostTile label="Nouvelle liste" onClick={() => setCreating(true)} />
     </div>
   )
 }

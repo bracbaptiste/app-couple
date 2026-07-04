@@ -2,10 +2,12 @@
 
 import Link from "next/link"
 import { Dialog } from "@base-ui/react/dialog"
-import { Search, Plus, Clock, Flame, SlidersHorizontal, X, Sparkles, Trash2 } from "lucide-react"
-import { forwardRef, useEffect, useMemo, useRef, useState, useTransition } from "react"
+import { Search, Plus, Clock, Flame, SlidersHorizontal, X, Trash2 } from "lucide-react"
+import { useMemo, useRef, useState, useTransition } from "react"
 
 import { RisoButton } from "@/components/ui/riso-button"
+import { GhostTile } from "@/components/shared/ghost-tile"
+import { NewRecipeSheet } from "@/components/recipes/NewRecipeSheet"
 import { useSwipeReveal } from "@/lib/hooks/useSwipeReveal"
 import { deleteRecipe } from "./actions"
 import { cn } from "@/lib/utils"
@@ -53,6 +55,8 @@ export function RecipesBrowser({ recipes }: { recipes: RecipeCardView[] }) {
   const [selectedTags, setSelectedTags] = useState<Set<Tag>>(new Set())
   // Replie le bloc de filtres par défaut : la recherche reste toujours visible.
   const [filtersOpen, setFiltersOpen] = useState(false)
+  // La tuile fantôme (fin de grille) ouvre le chooser d'ajout (§4.6).
+  const [adding, setAdding] = useState(false)
 
   function toggleType(t: TypePlat) {
     setSelectedTypes((prev) => {
@@ -91,7 +95,7 @@ export function RecipesBrowser({ recipes }: { recipes: RecipeCardView[] }) {
     })
   }, [recipes, query, selectedTypes, selectedTags])
 
-  // Carnet entièrement vide : message d'amorçage. Le FAB (en bas à droite)
+  // Carnet entièrement vide : message d'amorçage + tuile fantôme (§4.6), qui
   // reste le point d'entrée unique vers l'ajout / la création IA.
   if (recipes.length === 0) {
     return (
@@ -99,19 +103,18 @@ export function RecipesBrowser({ recipes }: { recipes: RecipeCardView[] }) {
         <p className="rounded-[10px] border-2 border-dashed border-ink bg-paper-light px-4 py-6 text-center text-sm text-ink-soft">
           Ton carnet de recettes est encore vide. Ajoute ta première recette en
           photographiant une fiche, même manuscrite — ou laisse l’IA t’en
-          composer une, via le bouton{" "}
+          composer une, via la tuile{" "}
           <Plus className="inline size-3.5 align-text-bottom" strokeWidth={3} aria-hidden />{" "}
-          en bas à droite.
+          en pointillés ci-dessous.
         </p>
-        <AddRecipeFab />
+        <GhostTile label="Nouvelle recette" onClick={() => setAdding(true)} />
+        <NewRecipeSheet open={adding} onOpenChange={setAdding} />
       </div>
     )
   }
 
   return (
     <div className="flex flex-col gap-4">
-      <AddRecipeFab />
-
       {/* Recherche par titre — la bascule des filtres est intégrée dans la barre */}
       <div className="flex items-center gap-2 rounded-[10px] border-2 border-ink bg-paper-light pl-3 pr-1.5 shadow-riso-ink focus-within:shadow-riso-sauge">
         <Search className="size-5 shrink-0 text-ink" strokeWidth={2.5} aria-hidden />
@@ -201,152 +204,14 @@ export function RecipesBrowser({ recipes }: { recipes: RecipeCardView[] }) {
           ))}
         </ul>
       )}
+
+      {/* Tuile fantôme (§4.6) : le geste d'ajout, en fin de grille. Remplace le
+          FAB « + » supprimé ; ouvre le même flux (« Ajouter » / « Créer IA »). */}
+      <GhostTile label="Nouvelle recette" onClick={() => setAdding(true)} />
+      <NewRecipeSheet open={adding} onOpenChange={setAdding} />
     </div>
   )
 }
-
-/* -------------------------------------------------------------------------- */
-/*  FAB d'ajout (déployable)                                                    */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Bouton flottant « + » ancré en bas à droite (mêmes codes que le FAB des
- * listes : carré 48px, brique, ombre encre, au-dessus de la BottomNav et de sa
- * safe-area iOS). Au tap, il se déploie en éventail pour révéler les deux points
- * d'entrée — « Ajouter une recette » (photo / saisie) et « Créer avec l'IA » —
- * puis le « + » bascule en « × » pour refermer. Un voile capte les clics
- * extérieurs ; Échap referme aussi.
- */
-function AddRecipeFab() {
-  const [open, setOpen] = useState(false)
-  // Restitution du focus : à la fermeture clavier/voile, on rend la main au
-  // déclencheur ; à l'ouverture, on porte le focus sur la première action.
-  const declencheurRef = useRef<HTMLButtonElement>(null)
-  const premiereActionRef = useRef<HTMLAnchorElement>(null)
-
-  // Referme et rend le focus au déclencheur (Échap, voile) — gardé hors
-  // navigation (un clic sur une action change de page, le focus n'importe plus).
-  function fermer() {
-    setOpen(false)
-    declencheurRef.current?.focus()
-  }
-
-  // Échap referme l'éventail (cohérence clavier avec les autres surfaces).
-  useEffect(() => {
-    if (!open) return
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") fermer()
-    }
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
-  }, [open])
-
-  // À l'ouverture, on amène le focus sur la première action de l'éventail.
-  useEffect(() => {
-    if (open) premiereActionRef.current?.focus()
-  }, [open])
-
-  return (
-    <>
-      {/* Voile assombri + léger flou : détache l'éventail du carnet de recettes
-          (sinon les vignettes derrière rendent l'ensemble brouillon). Un clic
-          dessus referme. Même teinte encre que les dialogs des listes. */}
-      {open && (
-        <button
-          type="button"
-          aria-hidden
-          tabIndex={-1}
-          onClick={fermer}
-          className="fixed inset-0 z-20 cursor-default bg-ink/55 backdrop-blur-[2px] motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150"
-        />
-      )}
-
-      <div className="fixed right-4 bottom-[calc(5rem+env(safe-area-inset-bottom))] z-30 flex flex-col items-end gap-3">
-        {/* Actions déployées (au-dessus du FAB), masquées au repos. */}
-        {open && (
-          <div className="flex flex-col items-end gap-2.5">
-            <FabAction
-              ref={premiereActionRef}
-              href="/recipes/new"
-              label="Ajouter une recette"
-              icon={Plus}
-              onNavigate={() => setOpen(false)}
-            />
-            <FabAction
-              href="/recipes/ai"
-              label="Créer avec l’IA"
-              icon={Sparkles}
-              variant="secondary"
-              onNavigate={() => setOpen(false)}
-            />
-          </div>
-        )}
-
-        {/* Le bouton principal : « + » au repos, « × » une fois déployé.
-            C'est une bascule (disclosure), pas un menu ARIA : les actions sont
-            de simples liens, donc `aria-expanded` seul, sans `aria-haspopup`. */}
-        <button
-          ref={declencheurRef}
-          type="button"
-          aria-expanded={open}
-          aria-label={open ? "Fermer le menu d’ajout" : "Ajouter une recette"}
-          onClick={() => setOpen((v) => !v)}
-          className="inline-flex size-12 items-center justify-center rounded-[12px] border-2 border-ink bg-brique text-paper-light shadow-riso-ink outline-none transition-[transform,box-shadow] focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-[2px] active:translate-y-[2px] active:shadow-none motion-reduce:transition-none"
-        >
-          <Plus
-            className={cn(
-              "size-5 transition-transform motion-reduce:transition-none",
-              open && "rotate-45",
-            )}
-            strokeWidth={2.5}
-            aria-hidden
-          />
-        </button>
-      </div>
-    </>
-  )
-}
-
-/**
- * Une entrée de l'éventail : pastille pleine (icône) précédée d'un libellé sur
- * une étiquette papier, l'ensemble étant un lien vers l'écran cible.
- */
-const FabAction = forwardRef<
-  HTMLAnchorElement,
-  {
-    href: string
-    label: string
-    icon: typeof Plus
-    variant?: "primary" | "secondary"
-    onNavigate: () => void
-  }
->(function FabAction(
-  { href, label, icon: Icon, variant = "primary", onNavigate },
-  ref,
-) {
-  return (
-    <Link
-      ref={ref}
-      href={href}
-      onClick={onNavigate}
-      className="group flex items-center gap-2.5 outline-none"
-    >
-      <span className="rounded-[8px] border-2 border-ink bg-paper px-3 py-1.5 font-mono text-[14px] font-bold uppercase tracking-tight text-ink shadow-riso-ink-sm">
-        {label}
-      </span>
-      <span
-        className={cn(
-          "inline-flex size-11 items-center justify-center rounded-[11px] border-2 border-ink shadow-riso-ink-sm transition-[transform,box-shadow] group-focus-visible:ring-2 group-focus-visible:ring-sauge group-focus-visible:ring-offset-2 group-focus-visible:ring-offset-paper group-active:translate-x-[2px] group-active:translate-y-[2px] group-active:shadow-none motion-reduce:transition-none",
-          variant === "primary"
-            ? "bg-brique text-paper-light"
-            : "bg-sauge text-ink",
-        )}
-      >
-        <Icon className="size-5" strokeWidth={2.5} aria-hidden />
-      </span>
-    </Link>
-  )
-})
 
 /* -------------------------------------------------------------------------- */
 /*  Filtres                                                                     */

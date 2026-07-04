@@ -1,16 +1,18 @@
 import { redirect } from "next/navigation"
 
+import { LastToolRedirect } from "@/components/shared/last-tool-redirect"
 import { createClient } from "@/lib/supabase/server"
-import { resolveLandingPath } from "@/lib/supabase/redirects"
+import { LISTS_PATH, resolveLandingPath } from "@/lib/supabase/redirects"
 
 /**
- * Racine `/` — point d'entrée qui aiguille immédiatement vers le bon écran :
- *   - non connecté            → /login
- *   - connecté sans couple     → /onboarding
- *   - connecté avec couple     → /lists
+ * Racine `/` — point d'entrée qui aiguille vers le bon écran :
+ *   - non connecté             → /login              (redirection serveur)
+ *   - connecté sans couple      → /onboarding         (redirection serveur)
+ *   - connecté avec couple       → dernier outil utilisé (redirection client)
  *
- * Ne rend aucun contenu : c'est une simple redirection serveur. (L'ancien
- * placeholder « Setup OK » servait à valider les tokens du Design System.)
+ * L'auth et l'onboarding restent tranchés côté serveur. Le « dernier outil »
+ * (PRD V4 §4.3) est une préférence locale (localStorage) : on ne peut la lire
+ * que côté client, d'où le relais `<LastToolRedirect>` pour un couple configuré.
  */
 export default async function Home() {
   const supabase = await createClient()
@@ -21,5 +23,11 @@ export default async function Home() {
 
   if (!user) redirect("/login")
 
-  redirect(await resolveLandingPath(supabase, user.id))
+  const landing = await resolveLandingPath(supabase, user.id)
+
+  // Onboarding non terminé : redirection serveur immédiate, comme avant.
+  if (landing !== LISTS_PATH) redirect(landing)
+
+  // Couple configuré : le client rejoue le dernier outil (Listes par défaut).
+  return <LastToolRedirect />
 }

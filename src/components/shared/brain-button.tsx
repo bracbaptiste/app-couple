@@ -95,11 +95,43 @@ function chipStyle(chip: FanChip, index: number, open: boolean): CSSProperties {
   }
 }
 
+/** Clé localStorage du coach mark (§4.3) : posé au premier affichage, jamais réaffiché. */
+const COACH_SEEN_KEY = "brain-coach-seen"
+
 export function BrainButton({ className }: { className?: string }) {
   const pathname = usePathname()
   const [open, setOpen] = useState(false)
+  // Coach mark unique au premier lancement post-V4 (§4.3). Faux au SSR ; on
+  // décide au montage client selon le flag localStorage (jamais réaffiché).
+  const [showCoach, setShowCoach] = useState(false)
 
   const close = useCallback(() => setOpen(false), [])
+
+  // Marque le coach mark comme vu et le retire (idempotent, tolérant au stockage).
+  const dismissCoach = useCallback(() => {
+    setShowCoach(false)
+    try {
+      localStorage.setItem(COACH_SEEN_KEY, "1")
+    } catch {
+      // localStorage indisponible : le coach mark ne réapparaîtra pas ce cycle,
+      // sans gravité (au pire il se remontre au prochain lancement).
+    }
+  }, [])
+
+  // Au tout premier lancement (aucun flag), on affiche le coach mark. Le
+  // setState est différé (setTimeout) pour ne pas déclencher de rendu en
+  // cascade synchrone dans l'effet (et rester SSR-safe : décidé côté client).
+  useEffect(() => {
+    let unseen = false
+    try {
+      unseen = !localStorage.getItem(COACH_SEEN_KEY)
+    } catch {
+      // pas de stockage lisible : on s'abstient d'afficher (comportement sûr).
+    }
+    if (!unseen) return
+    const timer = setTimeout(() => setShowCoach(true), 0)
+    return () => clearTimeout(timer)
+  }, [])
 
   // Échap ferme l'éventail (équivalent clavier du tap sur le voile).
   useEffect(() => {
@@ -128,7 +160,9 @@ export function BrainButton({ className }: { className?: string }) {
       <div
         className={cn(
           "fixed left-1/2 z-50 size-[72px] -translate-x-1/2",
-          "bottom-[calc(5rem+env(safe-area-inset-bottom))]",
+          // Bas de l'écran : la BottomNav ayant disparu (§4.7), le cerveau se
+          // pose bas (safe-area incluse) au lieu de flotter à mi-hauteur.
+          "bottom-[calc(1.5rem+env(safe-area-inset-bottom))]",
           className
         )}
       >
@@ -177,12 +211,40 @@ export function BrainButton({ className }: { className?: string }) {
           })}
         </div>
 
+        {/* Coach mark unique (§4.3) : bulle papier au-dessus du cerveau au tout
+            premier lancement. Tap dessus (ou ouverture de l'éventail) = vu, plus
+            jamais réaffiché. `role="status"` pour l'annonce ; l'info reste
+            purement additionnelle (le cerveau est utilisable sans elle). */}
+        {showCoach && !open && (
+          <button
+            type="button"
+            onClick={dismissCoach}
+            className="absolute bottom-full left-1/2 mb-3 w-max max-w-[220px] -translate-x-1/2 rounded-[12px] border-2 border-ink bg-paper px-3 py-2 text-left shadow-riso-ink-sm outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+          >
+            <span role="status" className="block font-mono text-[11px] leading-snug text-ink">
+              <span className="font-bold">Tap</span> = outils ·{" "}
+              <span className="font-bold">appui long</span> = parler
+            </span>
+            <span className="mt-1 block font-mono text-[9px] uppercase tracking-wide text-ink-soft">
+              Toucher pour fermer
+            </span>
+            {/* Petit ergot encre pointant vers le cerveau. */}
+            <span
+              aria-hidden
+              className="absolute left-1/2 top-full size-2.5 -translate-x-1/2 -translate-y-1/2 rotate-45 border-b-2 border-r-2 border-ink bg-paper"
+            />
+          </button>
+        )}
+
         {/* Le cerveau lui-même : tap = ouvre / ferme l'éventail. */}
         <button
           type="button"
           aria-label="Ouvrir les outils"
           aria-expanded={open}
-          onClick={() => setOpen((value) => !value)}
+          onClick={() => {
+            if (showCoach) dismissCoach()
+            setOpen((value) => !value)
+          }}
           className={cn(
             "absolute inset-0 flex items-center justify-center rounded-full",
             "border-[2.5px] border-ink bg-paper-light shadow-riso-ink",
