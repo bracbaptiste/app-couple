@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useState, type CSSProperties } from "react"
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react"
 import Image from "next/image"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
@@ -15,6 +15,8 @@ import {
 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { BrainListening } from "@/components/brain/brain-listening"
+import { type EcranContext } from "@/lib/brain/command-parsing"
 
 /**
  * BrainButton — le cerveau partagé est LE bouton flottant de l'app (PRD V4 §4.1).
@@ -40,6 +42,17 @@ import { cn } from "@/lib/utils"
 const BRAIN_SIZE = 72 // px — diamètre du cerveau (cf. §4.1)
 const FAN_RADIUS = BRAIN_SIZE * 2 // rayon de l'arc ≈ 2× le diamètre (§4.3)
 const STAGGER = 22 // ms entre jetons (déploiement centre → extérieur)
+const LONG_PRESS_MS = 400 // seuil d'appui long → écoute vocale (§4.2)
+
+/**
+ * Déduit l'écran courant (§5.1) du pathname : la route + l'id de liste ouverte si
+ * on est sur `/lists/[listId]`. Seule info transmise par le client au routeur —
+ * sert aux défauts d'ambiguïté, jamais à contourner la RLS.
+ */
+function ecranDepuisPath(pathname: string): EcranContext {
+  const m = /^\/lists\/([^/]+)/.exec(pathname)
+  return { route: pathname, liste_id: m ? m[1] : null }
+}
 
 type FanChip = {
   href: string
@@ -101,11 +114,26 @@ const COACH_SEEN_KEY = "brain-coach-seen"
 export function BrainButton({ className }: { className?: string }) {
   const pathname = usePathname()
   const [open, setOpen] = useState(false)
+  // État Écoute (§4.2) : ouvert par l'appui long, piloté par BrainListening.
+  const [listenOpen, setListenOpen] = useState(false)
   // Coach mark unique au premier lancement post-V4 (§4.3). Faux au SSR ; on
   // décide au montage client selon le flag localStorage (jamais réaffiché).
   const [showCoach, setShowCoach] = useState(false)
 
+  // Appui long : un timer armé au pointerdown ; s'il atteint le seuil, on ouvre
+  // l'écoute et on marque `fired` pour AVALER le click de fin de geste (sinon le
+  // relâchement ouvrirait l'éventail par-dessus).
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const longPressFired = useRef(false)
+
   const close = useCallback(() => setOpen(false), [])
+
+  const cancelLongPress = useCallback(() => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current)
+      longPressTimer.current = null
+    }
+  }, [])
 
   // Marque le coach mark comme vu et le retire (idempotent, tolérant au stockage).
   const dismissCoach = useCallback(() => {
@@ -239,11 +267,41 @@ export function BrainButton({ className }: { className?: string }) {
         {/* Le cerveau lui-même : tap = ouvre / ferme l'éventail. */}
         <button
           type="button"
-          aria-label="Ouvrir les outils"
+          aria-label="Ouvrir les outils (appui long pour parler)"
           aria-expanded={open}
+          onPointerDown={(e) => {
+            // Souris : bouton gauche uniquement. Le clic droit / tactile long ne
+            // doivent pas déclencher le menu contextuel natif (cf. onContextMenu).
+            if (e.pointerType === "mouse" && e.button !== 0) return
+            longPressFired.current = false
+            cancelLongPress()
+            longPressTimer.current = setTimeout(() => {
+              longPressFired.current = true
+              longPressTimer.current = null
+              setOpen(false)
+              if (showCoach) dismissCoach()
+              setListenOpen(true)
+            }, LONG_PRESS_MS)
+          }}
+          onPointerUp={cancelLongPress}
+          onPointerLeave={cancelLongPress}
+          onPointerCancel={cancelLongPress}
+          onContextMenu={(e) => e.preventDefault()}
           onClick={() => {
+            // Fin d'un appui long : le geste a déjà ouvert l'écoute, on avale le
+            // click pour ne pas déployer l'éventail par-dessus.
+            if (longPressFired.current) {
+              longPressFired.current = false
+              return
+            }
             if (showCoach) dismissCoach()
             setOpen((value) => !value)
+          }}
+          style={{
+            touchAction: "manipulation",
+            WebkitUserSelect: "none",
+            userSelect: "none",
+            WebkitTouchCallout: "none", // supprime le menu/callout long-press iOS
           }}
           className={cn(
             "absolute inset-0 flex items-center justify-center rounded-full",
@@ -251,7 +309,13 @@ export function BrainButton({ className }: { className?: string }) {
             "outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
           )}
         >
-          <span aria-hidden className="brain-logo relative block size-12">
+          <span
+            aria-hidden
+            className={cn(
+              "brain-logo relative block size-12",
+              listenOpen && "is-listening"
+            )}
+          >
             <Image
               src="/icons/brain.png"
               alt=""
@@ -272,6 +336,16 @@ export function BrainButton({ className }: { className?: string }) {
           </span>
         </button>
       </div>
+
+      {/* État Écoute → Réflexion → Succès (§5.5). Ouvert par l'appui long. Monté
+          à l'ouverture / démonté à la fermeture → repart toujours vierge. */}
+      {listenOpen && (
+        <BrainListening
+          open
+          onClose={() => setListenOpen(false)}
+          ecran={ecranDepuisPath(pathname)}
+        />
+      )}
     </>
   )
 }

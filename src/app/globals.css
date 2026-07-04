@@ -178,3 +178,123 @@
     transition-timing-function: cubic-bezier(0.34, 1.5, 0.5, 1), ease-out;
   }
 }
+
+/*
+  États vocaux du Cerveau — langage « atelier d'imprimerie » (PRD V4 §4.4).
+  Toutes ces animations sont DÉCORATIVES : chaque état reste compréhensible sans
+  elles (texte + couleurs), d'où le gating systématique sous no-preference.
+*/
+
+/* --- Écoute : barres d'encre qui dansent (§4.4 « barres d'encre ») ---------- */
+.brain-ink-bar {
+  transform-origin: center bottom;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .brain-ink-bar {
+    animation: brain-ink-dance 900ms ease-in-out infinite;
+  }
+}
+@keyframes brain-ink-dance {
+  0%,
+  100% {
+    transform: scaleY(0.4);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+/* --- Écoute : anneaux pointillés brique qui pulsent (§4.2) ------------------- */
+@media (prefers-reduced-motion: no-preference) {
+  .brain-listen-ring {
+    animation: brain-ring-pulse 1800ms ease-out infinite;
+  }
+}
+@keyframes brain-ring-pulse {
+  0% {
+    transform: scale(0.75);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+
+/* --- Écoute : pulsation alternée sauge/brique du logo (§4.2) ----------------- */
+@media (prefers-reduced-motion: no-preference) {
+  .brain-logo.is-listening {
+    animation: brain-listen-throb 800ms ease-in-out infinite;
+  }
+}
+@keyframes brain-listen-throb {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.09);
+  }
+}
+
+/* --- Réflexion : oscillations alternées « ils se parlent » (§4.2) ------------ */
+@media (prefers-reduced-motion: no-preference) {
+  .brain-thinking-l {
+    animation: brain-osc 520ms ease-in-out infinite;
+  }
+  .brain-thinking-r {
+    animation: brain-osc 520ms ease-in-out infinite;
+    animation-delay: -260ms;
+  }
+}
+@keyframes brain-osc {
+  0%,
+  100% {
+    transform: translateX(-1.5px) rotate(-5deg);
+  }
+  50% {
+    transform: translateX(1.5px) rotate(5deg);
+  }
+}
+
+/* --- Succès : le tampon « C'EST NOTÉ ! » qui claque (§4.4, ~450 ms) ---------- */
+@media (prefers-reduced-motion: no-preference) {
+  .brain-stamp {
+    animation: brain-stamp-slam 450ms cubic-bezier(0.2, 1.4, 0.4, 1) both;
+  }
+}
+@keyframes brain-stamp-slam {
+  0% {
+    transform: scale(1.6) rotate(-9deg);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(0.94) rotate(-2deg);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1) rotate(-3deg);
+    opacity: 1;
+  }
+}
+
+/*
+  Article ajouté par la voix : la ligne « s'imprime » dans la liste — fond sauge
+  qui s'estompe + légère translation verticale (§4.4). Décoratif : sous mouvement
+  réduit, la ligne apparaît simplement (Realtime), sans animation.
+*/
+@media (prefers-reduced-motion: no-preference) {
+  .brain-print-in {
+    animation: brain-print-in 1100ms ease-out both;
+  }
+}
+@keyframes brain-print-in {
+  0% {
+    transform: translateY(-6px);
+    background-color: var(--color-sauge);
+  }
+  100% {
+    transform: translateY(0);
+    background-color: var(--color-paper-light);
+  }
+}

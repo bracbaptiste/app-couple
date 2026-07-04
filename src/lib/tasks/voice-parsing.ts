@@ -157,8 +157,12 @@ export class TaskParseError extends Error {
   }
 }
 
-/** Vrai si la valeur est une chaîne « YYYY-MM-DD » correspondant à une date réelle. */
-function estDateIsoValide(v: unknown): v is string {
+/**
+ * Vrai si la valeur est une chaîne « YYYY-MM-DD » correspondant à une date réelle.
+ * Exporté pour être réutilisé par le routeur d'intentions V4 (`taches.ajouter`),
+ * qui partage exactement la même règle de résolution de date.
+ */
+export function estDateIsoValide(v: unknown): v is string {
   if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false
   const [y, m, d] = v.split("-").map(Number)
   const date = new Date(Date.UTC(y, m - 1, d))
@@ -182,8 +186,11 @@ function entierBorne(v: unknown, min: number, max: number): number | null {
  * Coerce le bloc `recurrence` de l'IA vers {@link ParsedRecurrence} ou `null`.
  * Toute valeur hors des jeux fermés est neutralisée ; `type` absent/`'none'`
  * (ou type non répétitif) ramène l'ensemble à `null`.
+ *
+ * Exporté pour le routeur d'intentions V4 (`taches.ajouter`), qui réutilise à
+ * l'identique la coercition de récurrence.
  */
-function coerceRecurrence(v: unknown): ParsedRecurrence | null {
+export function coerceRecurrence(v: unknown): ParsedRecurrence | null {
   if (!v || typeof v !== "object") return null
   const o = v as Record<string, unknown>
 

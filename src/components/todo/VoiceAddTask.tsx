@@ -5,18 +5,15 @@ import { useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 
 import { RisoButton } from "@/components/ui/riso-button"
-import { RisoDatePicker } from "@/components/ui/riso-date-picker"
-import { cn } from "@/lib/utils"
-import { getDueLabel } from "@/lib/hooks/useTaskState"
-import {
-  type Recurrence,
-  NO_RECURRENCE,
-  normalizeRecurrence,
-} from "@/lib/tasks/recurrence"
-import { type ParsedTask } from "@/lib/tasks/voice-parsing"
+import { NO_RECURRENCE } from "@/lib/tasks/recurrence"
+import { type BrainAction } from "@/lib/brain/command-parsing"
 
 import { type AddTaskOptions } from "./AddTaskBar"
-import { TaskOptionsFields } from "./TaskOptionsFields"
+import {
+  TaskReviewSheet,
+  taskActionToInitial,
+  type TaskReviewInitial,
+} from "./TaskReviewSheet"
 
 /** Membre du couple proposé comme assigné. */
 type VoiceMember = { id: string; name: string; color: "sauge" | "brique" }
@@ -42,26 +39,17 @@ type VoiceAddTaskProps = {
 /**
  * Étapes du flux vocal :
  *   - `dictate` : champ texte focalisé (clavier ouvert → micro natif OU frappe) ;
- *   - `parsing` : appel /api/parse-task en cours ;
+ *   - `parsing` : appel /api/brain-command en cours ;
  *   - `error`   : échec du parsing → réessayer / saisie manuelle ;
- *   - `review`  : écran de validation pré-rempli, tout corrigeable avant l'ajout.
+ *   - `review`  : écran de validation V2.1 pré-rempli ({@link TaskReviewSheet}).
  */
 type Step = "dictate" | "parsing" | "error" | "review"
 
 const TITLE_MAX = 120
 const TEXT_MAX = 1000
 
-/** Convertit la récurrence renvoyée par l'IA (snake_case) en {@link Recurrence}. */
-function recurrenceFromParsed(p: ParsedTask["recurrence"]): Recurrence {
-  if (!p) return { ...NO_RECURRENCE }
-  // `normalizeRecurrence` borne les valeurs et neutralise les champs hors type.
-  return normalizeRecurrence({
-    type: p.type,
-    interval: p.interval,
-    weekday: p.weekday,
-    dayOfMonth: p.day_of_month,
-  })
-}
+/** Forme (partielle) de la réponse du routeur utile ici (§5.3 + taskContext). */
+type BrainResponse = { actions?: BrainAction[] }
 
 /**
  * VoiceAddTask — ajout d'une tâche par la voix (PRD-taches-v2.1 §3.2).
@@ -69,11 +57,14 @@ function recurrenceFromParsed(p: ParsedTask["recurrence"]): Recurrence {
  * Stratégie voix (NON NÉGOCIABLE) : on n'utilise PAS l'API Web Speech
  * (`webkitSpeechRecognition`), inopérante dans une PWA installée sur iPhone. On
  * s'appuie sur la DICTÉE NATIVE du clavier : un tap sur le micro ouvre un champ
- * texte focalisé ; l'utilisateur dicte via le micro de son clavier (ou tape). La
- * phrase part vers `/api/parse-task` (clé serveur, Haiku), qui renvoie une tâche
- * structurée. On affiche alors un ÉCRAN DE VALIDATION pré-rempli — titre,
- * échéance, récurrence, assigné, liste cible — entièrement corrigeable. Rien
- * n'est écrit avant que l'utilisateur ne confirme (garde-fou §3.2).
+ * texte focalisé ; l'utilisateur dicte via le micro de son clavier (ou tape).
+ *
+ * Migration V4 (§0.5) : la phrase part désormais vers `/api/brain-command` (le
+ * routeur d'intentions), avec `mode: "task"` pour ancrer l'interprétation sur les
+ * tâches — le comportement historique (dictée → tâche à valider) est préservé. On
+ * réutilise l'ÉCRAN DE VALIDATION V2.1 tel quel ({@link TaskReviewSheet}) : rien
+ * n'est écrit avant confirmation (garde-fou §3.2). En repli (le routeur n'a pas
+ * produit de tâche), la phrase brute devient l'intitulé à valider.
  */
 export function VoiceAddTask({
   lists,
@@ -86,13 +77,7 @@ export function VoiceAddTask({
   const [step, setStep] = useState<Step | null>(null)
   const [text, setText] = useState("")
   const [errorMsg, setErrorMsg] = useState("")
-
-  // Champs de l'écran de validation (corrigeables).
-  const [title, setTitle] = useState("")
-  const [due, setDue] = useState("") // « yyyy-mm-dd » | ""
-  const [recurrence, setRecurrence] = useState<Recurrence>(NO_RECURRENCE)
-  const [assignedTo, setAssignedTo] = useState<string | null>(defaultAssignee)
-  const [listId, setListId] = useState<string>(currentListId)
+  const [prefill, setPrefill] = useState<TaskReviewInitial | null>(null)
 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -124,36 +109,33 @@ export function VoiceAddTask({
     setStep(null)
   }
 
-  /** Pré-remplit l'écran de validation à partir de la tâche structurée par l'IA. */
-  function applyParsed(task: ParsedTask) {
-    setTitle(task.title.slice(0, TITLE_MAX))
-    setDue(task.due_date ?? "")
-    setRecurrence(recurrenceFromParsed(task.recurrence))
-    // L'id est déjà validé côté serveur, mais on ne garde que ce qui existe
-    // vraiment dans le contexte du client (défense en profondeur).
-    const assignee =
-      task.assigned_to && members.some((m) => m.id === task.assigned_to)
-        ? task.assigned_to
-        : defaultAssignee
-    setAssignedTo(assignee)
-    const target =
-      task.list_id && lists.some((l) => l.id === task.list_id)
-        ? task.list_id
-        : currentListId
-    setListId(target)
+  /** Repli « saisie manuelle » : la phrase dictée devient le titre, sans structure. */
+  function fallbackToManual(phrase: string) {
+    setPrefill({
+      title: phrase.slice(0, TITLE_MAX),
+      due: "",
+      recurrence: { ...NO_RECURRENCE },
+      assignedTo: defaultAssignee,
+      listId: currentListId,
+    })
+    setStep("review")
   }
 
-  /** Envoie la phrase dictée au parsing serveur, puis bascule sur la validation. */
+  /** Envoie la phrase dictée au routeur (mode tâche), puis ouvre la validation. */
   async function parse() {
     const phrase = text.trim().slice(0, TEXT_MAX)
     if (!phrase) return
     setErrorMsg("")
     setStep("parsing")
     try {
-      const res = await fetch("/api/parse-task", {
+      const res = await fetch("/api/brain-command", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: phrase }),
+        body: JSON.stringify({
+          text: phrase,
+          mode: "task",
+          contexte_ecran: { route: `/lists/${currentListId}`, liste_id: currentListId },
+        }),
       })
       if (!res.ok) {
         const data = (await res.json().catch(() => null)) as {
@@ -163,35 +145,29 @@ export function VoiceAddTask({
         setStep("error")
         return
       }
-      const task = (await res.json()) as ParsedTask
-      applyParsed(task)
-      setStep("review")
+      const result = (await res.json()) as BrainResponse
+      const task = (result.actions ?? []).find(
+        (a): a is Extract<BrainAction, { intent: "taches.ajouter" }> =>
+          a.intent === "taches.ajouter",
+      )
+      if (task) {
+        setPrefill(
+          taskActionToInitial(task, {
+            lists,
+            members,
+            defaultListId: currentListId,
+            defaultAssignee,
+          }),
+        )
+        setStep("review")
+      } else {
+        // Le routeur n'a pas structuré de tâche : on garde la phrase comme titre.
+        fallbackToManual(phrase)
+      }
     } catch {
       setErrorMsg("Connexion impossible. Vérifie ta connexion et réessaie.")
       setStep("error")
     }
-  }
-
-  /** Repli « saisie manuelle » : la phrase dictée devient le titre, sans IA. */
-  function manualEntry() {
-    setTitle(text.trim().slice(0, TITLE_MAX))
-    setDue("")
-    setRecurrence({ ...NO_RECURRENCE })
-    setAssignedTo(defaultAssignee)
-    setListId(currentListId)
-    setStep("review")
-  }
-
-  function confirm() {
-    const name = title.trim()
-    if (!name || !listId) return
-    onConfirm(listId, name, {
-      // Comme AddTaskBar : « yyyy-mm-dd » → Date (minuit UTC, stable au format ISO).
-      dueDate: due ? new Date(due) : undefined,
-      assignedTo,
-      recurrence,
-    })
-    close()
   }
 
   return (
@@ -208,7 +184,9 @@ export function VoiceAddTask({
         <Mic className="size-5" strokeWidth={2.5} aria-hidden />
       </button>
 
+      {/* Étapes dictée / parsing / erreur : modale propre à ce flux. */}
       {open &&
+        step !== "review" &&
         typeof document !== "undefined" &&
         createPortal(
           <div
@@ -230,7 +208,7 @@ export function VoiceAddTask({
               {/* En-tête commun */}
               <div className="mb-3 flex items-center justify-between gap-2">
                 <h2 className="font-display text-base uppercase leading-none text-ink">
-                  {step === "review" ? "Vérifie la tâche" : "Dicter une tâche"}
+                  Dicter une tâche
                 </h2>
                 <button
                   type="button"
@@ -276,11 +254,7 @@ export function VoiceAddTask({
                     <RisoButton variant="ghost" size="sm" onClick={close}>
                       Annuler
                     </RisoButton>
-                    <RisoButton
-                      type="submit"
-                      size="sm"
-                      disabled={!text.trim()}
-                    >
+                    <RisoButton type="submit" size="sm" disabled={!text.trim()}>
                       Continuer
                     </RisoButton>
                   </div>
@@ -317,7 +291,7 @@ export function VoiceAddTask({
                     <RisoButton
                       variant="ghost"
                       size="sm"
-                      onClick={manualEntry}
+                      onClick={() => fallbackToManual(text.trim())}
                     >
                       Saisie manuelle
                     </RisoButton>
@@ -333,123 +307,25 @@ export function VoiceAddTask({
                   </div>
                 </div>
               )}
-
-              {/* ----- Étape : validation ----- */}
-              {step === "review" && (
-                <div className="flex flex-col gap-4">
-                  {/* Titre */}
-                  <div className="flex flex-col gap-1.5">
-                    <label
-                      htmlFor="voice-task-title"
-                      className="font-mono text-[11px] font-bold uppercase tracking-wide text-ink-soft"
-                    >
-                      Tâche
-                    </label>
-                    <input
-                      id="voice-task-title"
-                      value={title}
-                      onChange={(e) => setTitle(e.target.value)}
-                      maxLength={TITLE_MAX}
-                      placeholder="Intitulé de la tâche"
-                      className="h-12 w-full rounded-[8px] border-2 border-ink bg-paper-light px-3 text-base font-medium text-ink outline-none placeholder:text-ink-soft/60 focus-visible:shadow-riso-sauge"
-                    />
-                  </div>
-
-                  {/* Échéance */}
-                  <div className="flex flex-col gap-1.5">
-                    <span className="font-mono text-[11px] font-bold uppercase tracking-wide text-ink-soft">
-                      Échéance
-                    </span>
-                    <div className="flex items-center gap-2">
-                      {due ? (
-                        <span className="inline-flex items-center gap-1 rounded-[4px] border-[1.5px] border-ink bg-paper px-1.5 py-[3px] font-display text-[10px] uppercase leading-none text-ink-soft">
-                          {getDueLabel(due)}
-                          <button
-                            type="button"
-                            onClick={() => setDue("")}
-                            aria-label="Retirer l’échéance"
-                            className="relative -mr-0.5 inline-flex items-center justify-center rounded-[3px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-ink before:absolute before:left-1/2 before:top-1/2 before:size-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-['']"
-                          >
-                            <X className="size-3" strokeWidth={3} aria-hidden />
-                          </button>
-                        </span>
-                      ) : (
-                        <span className="font-body text-[13px] text-ink-soft">
-                          Aucune
-                        </span>
-                      )}
-                      <RisoDatePicker
-                        value={due}
-                        onChange={setDue}
-                        size="sm"
-                        triggerLabel="Choisir une échéance"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Assigné + récurrence : sélecteurs partagés (étape 5). */}
-                  <TaskOptionsFields
-                    members={members}
-                    assignedTo={assignedTo}
-                    onAssignedToChange={setAssignedTo}
-                    recurrence={recurrence}
-                    onRecurrenceChange={setRecurrence}
-                    dueDate={due || null}
-                  />
-
-                  {/* Liste cible */}
-                  <div className="flex flex-col gap-1.5">
-                    <span className="font-mono text-[11px] font-bold uppercase tracking-wide text-ink-soft">
-                      Liste
-                    </span>
-                    {lists.length > 0 ? (
-                      <div className="flex flex-wrap gap-1.5">
-                        {lists.map((l) => {
-                          const selected = listId === l.id
-                          return (
-                            <button
-                              key={l.id}
-                              type="button"
-                              aria-pressed={selected}
-                              onClick={() => setListId(l.id)}
-                              className={cn(
-                                "inline-flex min-h-9 items-center rounded-[6px] border-2 border-ink px-2.5 py-1 font-mono text-[11px] font-bold uppercase leading-none tracking-wide outline-none transition-transform focus-visible:ring-2 focus-visible:ring-ink active:translate-x-px active:translate-y-px",
-                                selected
-                                  ? "bg-ink text-paper"
-                                  : "bg-paper-light text-ink-soft",
-                              )}
-                            >
-                              {l.name}
-                            </button>
-                          )
-                        })}
-                      </div>
-                    ) : (
-                      <p className="font-body text-[13px] text-ink-soft">
-                        Aucune to-do list disponible.
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Actions */}
-                  <div className="flex justify-end gap-2 pt-1">
-                    <RisoButton variant="ghost" size="sm" onClick={close}>
-                      Annuler
-                    </RisoButton>
-                    <RisoButton
-                      size="sm"
-                      onClick={confirm}
-                      disabled={!title.trim() || !listId}
-                    >
-                      Ajouter
-                    </RisoButton>
-                  </div>
-                </div>
-              )}
             </div>
           </div>,
           document.body,
         )}
+
+      {/* ----- Étape : validation V2.1 (écran réutilisé) ----- */}
+      {step === "review" && prefill && (
+        <TaskReviewSheet
+          open
+          initial={prefill}
+          lists={lists}
+          members={members}
+          onClose={close}
+          onConfirm={(listId, title, opts) => {
+            onConfirm(listId, title, opts)
+            close()
+          }}
+        />
+      )}
     </>
   )
 }

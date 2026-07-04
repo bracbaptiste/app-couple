@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { Pencil, Trash2 } from "lucide-react"
-import { useMemo, useState, useTransition } from "react"
+import { useEffect, useMemo, useRef, useState, useTransition } from "react"
 
 import { AddedByMarker } from "@/components/ui/added-by-marker"
 import { CategoryHeader } from "@/components/ui/category-header"
@@ -162,6 +162,36 @@ export function ListDetail({
     })
   }
 
+  // « Impression » d'une ligne (§4.4) : une ligne qui APPARAÎT (Realtime — après
+  // un ajout vocal, ou par le partenaire) s'imprime (fond sauge qui s'estompe).
+  // On mémorise les ids déjà vus ; les nouveaux reçoivent la classe le temps de
+  // l'animation. Rien au premier rendu (on n'imprime pas l'existant au chargement).
+  const seenIds = useRef<Set<string> | null>(null)
+  const [printing, setPrinting] = useState<Set<string>>(() => new Set())
+  useEffect(() => {
+    const current = new Set(displayItems.map((i) => i.id))
+    if (seenIds.current === null) {
+      seenIds.current = current
+      return
+    }
+    const fresh = [...current].filter((id) => !seenIds.current!.has(id))
+    seenIds.current = current
+    if (fresh.length === 0) return
+    setPrinting((prev) => {
+      const next = new Set(prev)
+      for (const id of fresh) next.add(id)
+      return next
+    })
+    const timer = setTimeout(() => {
+      setPrinting((prev) => {
+        const next = new Set(prev)
+        for (const id of fresh) next.delete(id)
+        return next
+      })
+    }, 1200)
+    return () => clearTimeout(timer)
+  }, [displayItems])
+
   const unchecked = displayItems.filter((i) => !i.isChecked)
   const checked = displayItems.filter((i) => i.isChecked)
 
@@ -229,6 +259,7 @@ export function ListDetail({
                     member={item.addedBy ? membersById.get(item.addedBy) ?? null : null}
                     onToggle={handleToggle}
                     toggling={isPending}
+                    printing={printing.has(item.id)}
                   />
                 ))}
               </ul>
@@ -261,6 +292,7 @@ export function ListDetail({
                     member={item.addedBy ? membersById.get(item.addedBy) ?? null : null}
                     onToggle={handleToggle}
                     toggling={isPending}
+                    printing={printing.has(item.id)}
                   />
                 ))}
               </ul>
@@ -300,6 +332,7 @@ function ItemRow({
   member,
   onToggle,
   toggling,
+  printing = false,
 }: {
   listId: string
   item: ItemView
@@ -308,6 +341,8 @@ function ItemRow({
   onToggle: (itemId: string, next: boolean) => void
   /** Une transition (cochage) est en cours dans la liste. */
   toggling: boolean
+  /** La ligne vient d'apparaître : elle « s'imprime » (§4.4). */
+  printing?: boolean
 }) {
   const [isPending, startTransition] = useTransition()
   const [mode, setMode] = useState<ItemMode>(null)
@@ -391,6 +426,9 @@ function ItemRow({
       <div
         className={cn(
           "relative z-10 select-none touch-pan-y rounded-[10px] border-2 border-ink bg-paper-light p-2",
+          // Ligne qui vient d'apparaître : elle « s'imprime » (fond sauge qui
+          // s'estompe, §4.4). Décoratif → neutralisé sous mouvement réduit.
+          printing && "brain-print-in",
           // Une fois glissée, on carre le bord droit : son trait encre devient
           // une verticale franche, au contact du calque vert/brique, sans liseré
           // de papier dans l'arrondi (au repos, coins arrondis comme avant).
