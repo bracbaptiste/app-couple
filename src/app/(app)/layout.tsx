@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation"
 
 import { BottomNav } from "@/components/shared/bottom-nav"
+import { BrainButton } from "@/components/shared/brain-button"
 import { OfflineIndicator } from "@/components/shared/offline-indicator"
 import { requireAuth } from "@/lib/supabase/auth"
 
@@ -31,6 +32,9 @@ export default async function AppLayout({
           du réseau. Sticky en haut, non bloquant (cf. OfflineIndicator). */}
       <OfflineIndicator />
       <main className="flex-1 px-4 pt-5 pb-6">{children}</main>
+      {/* Cerveau flottant (Phase 1). La BottomNav reste en place jusqu'au prompt 3 ;
+          le cerveau flotte juste au-dessus d'elle (z-50 > z-40), sans navigation. */}
+      <BrainButton />
       <BottomNav />
     </div>
   )

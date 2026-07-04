@@ -99,3 +99,55 @@
     background-size: 8px 8px;
   }
 }
+
+/*
+  BrainButton — cerveau flottant (PRD V4 §4.1/§4.2).
+  Deux copies du PNG superposées, clippées chacune sur sa moitié (fissure à 50 %).
+  Le bob vertical déplace la moitié ET sa fenêtre de clip ensemble : la couture
+  centrale reste verticale (aucun gap ni recouvrement), seuls les hémisphères
+  montent/descendent en opposition de phase.
+*/
+.brain-half {
+  transform-origin: center;
+}
+.brain-half-l {
+  clip-path: inset(0 50% 0 0);
+}
+.brain-half-r {
+  clip-path: inset(0 0 0 50%);
+}
+
+/* État « Repos » : respiration + alternance douce. Décoratif → uniquement
+   quand l'utilisateur n'a pas demandé la réduction des animations. */
+@media (prefers-reduced-motion: no-preference) {
+  .brain-logo {
+    animation: brain-breathe 4.5s ease-in-out infinite;
+  }
+  .brain-half-l {
+    animation: brain-bob 4.5s ease-in-out infinite;
+  }
+  .brain-half-r {
+    animation: brain-bob 4.5s ease-in-out infinite;
+    animation-delay: -2.25s; /* opposition de phase → alternance des hémisphères */
+  }
+}
+
+@keyframes brain-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.035);
+  }
+}
+
+@keyframes brain-bob {
+  0%,
+  100% {
+    transform: translateY(-0.6px);
+  }
+  50% {
+    transform: translateY(0.6px);
+  }
+}
