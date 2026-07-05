@@ -319,3 +319,258 @@ describe("niveauAction — confirmation graduée (§6)", () => {
     })
   })
 })
+
+describe("parseBrainCommand — planning.placer_repas (§8.7)", () => {
+  it("relie le repas à une recette du carnet par TITRE (jamais un id de l'IA)", () => {
+    const r = parseBrainCommand(
+      reponse([
+        {
+          intent: "planning.placer_repas",
+          date: "2026-07-09",
+          creneau: "diner",
+          // Le nom dicté, casse/pluriel indifférents : résolu serveur par clé.
+          repas: "de la Ratatouille",
+        },
+      ]),
+      CTX,
+    )
+    expect(r.clarification).toBeNull()
+    expect(r.actions[0]).toEqual({
+      intent: "planning.placer_repas",
+      date: "2026-07-09",
+      creneau: "diner",
+      repas: { kind: "recette", recipe_id: "re-rata", titre: "Ratatouille" },
+    })
+    expect(niveauAction(r.actions[0])).toBe(1)
+  })
+
+  it("retombe en texte libre quand aucune recette ne matche", () => {
+    const r = parseBrainCommand(
+      reponse([
+        {
+          intent: "planning.placer_repas",
+          date: "2026-07-09",
+          creneau: "dejeuner",
+          repas: "restes",
+        },
+      ]),
+      CTX,
+    )
+    expect(r.actions[0]).toEqual({
+      intent: "planning.placer_repas",
+      date: "2026-07-09",
+      creneau: "dejeuner",
+      repas: { kind: "texte", texte: "restes" },
+    })
+  })
+
+  it("demande une clarification si plusieurs recettes portent le même titre", () => {
+    const ctx: BrainContext = {
+      ...CTX,
+      recettes: [
+        { id: "re-rata-1", titre: "Ratatouille" },
+        { id: "re-rata-2", titre: "ratatouille" }, // même clé normalisée
+      ],
+    }
+    const r = parseBrainCommand(
+      reponse([
+        {
+          intent: "planning.placer_repas",
+          date: "2026-07-09",
+          creneau: "diner",
+          repas: "ratatouille",
+        },
+      ]),
+      ctx,
+    )
+    expect(r.actions).toEqual([])
+    expect(r.clarification).toEqual({
+      question: "Quelle recette ?",
+      options: [
+        { label: "Ratatouille", recipe_id: "re-rata-1" },
+        { label: "ratatouille", recipe_id: "re-rata-2" },
+      ],
+      placement: { date: "2026-07-09", creneau: "diner" },
+    })
+  })
+
+  it("ignore une date impossible ou un créneau hors du jeu fermé", () => {
+    const r = parseBrainCommand(
+      reponse([
+        { intent: "planning.placer_repas", date: "2026-02-31", creneau: "diner", repas: "riz" },
+        { intent: "planning.placer_repas", date: "2026-07-09", creneau: "gouter", repas: "riz" },
+      ]),
+      CTX,
+    )
+    expect(r.actions).toEqual([])
+  })
+})
+
+describe("parseBrainCommand — planning.generer_liste (§8.7)", () => {
+  it("résout la liste nommée et applique le défaut 2 personnes", () => {
+    const r = parseBrainCommand(
+      reponse([
+        { intent: "planning.generer_liste", liste_id: "co-auchan", personnes: null },
+      ]),
+      CTX,
+    )
+    expect(r.actions[0]).toEqual({
+      intent: "planning.generer_liste",
+      liste_id: "co-auchan",
+      personnes: 2,
+    })
+    expect(niveauAction(r.actions[0])).toBe(2)
+  })
+
+  it("conserve un nombre de personnes explicite", () => {
+    const r = parseBrainCommand(
+      reponse([
+        { intent: "planning.generer_liste", liste_id: "co-carrefour", personnes: 4 },
+      ]),
+      CTX,
+    )
+    expect(r.actions[0]).toMatchObject({ liste_id: "co-carrefour", personnes: 4 })
+  })
+
+  it("demande une clarification de liste si aucune n'est déterminable (§5.4.5)", () => {
+    const r = parseBrainCommand(
+      reponse([{ intent: "planning.generer_liste", liste_id: null }]),
+      CTX,
+    )
+    expect(r.actions).toEqual([])
+    expect(r.clarification).toEqual({
+      question: "Dans quelle liste ?",
+      options: [
+        { label: "Auchan", liste_id: "co-auchan" },
+        { label: "Carrefour", liste_id: "co-carrefour" },
+      ],
+    })
+  })
+})
+
+describe("parseBrainCommand — consultation.lire (§5.2, lecture seule)", () => {
+  it("résout la liste nommée pour « ce qu'il reste à acheter »", () => {
+    const r = parseBrainCommand(
+      reponse([
+        {
+          intent: "consultation.lire",
+          cible: { type: "liste_courses", liste_id: "co-auchan" },
+        },
+      ]),
+      CTX,
+    )
+    expect(r.actions[0]).toEqual({
+      intent: "consultation.lire",
+      cible: { type: "liste_courses", liste_id: "co-auchan", nom: "Auchan" },
+    })
+    // Lecture seule : jamais classée niveau 2 (traitée à part par le client).
+    expect(niveauAction(r.actions[0])).toBe(1)
+  })
+
+  it("clarifie si la liste à consulter est ambiguë", () => {
+    const r = parseBrainCommand(
+      reponse([
+        { intent: "consultation.lire", cible: { type: "liste_courses", liste_id: null } },
+      ]),
+      CTX,
+    )
+    expect(r.actions).toEqual([])
+    expect(r.clarification).not.toBeNull()
+  })
+
+  it("borne la date pour « qu'est-ce qu'on mange demain ? »", () => {
+    const r = parseBrainCommand(
+      reponse([
+        { intent: "consultation.lire", cible: { type: "repas_jour", date: "2026-07-06" } },
+        { intent: "consultation.lire", cible: { type: "taches_jour", date: "2026-02-31" } },
+      ]),
+      CTX,
+    )
+    expect(r.actions).toEqual([
+      { intent: "consultation.lire", cible: { type: "repas_jour", date: "2026-07-06" } },
+    ])
+  })
+})
+
+describe("parseBrainCommand — recettes.proposer / ajouter_ingredients (§5.2)", () => {
+  it("transporte les contraintes de proposition (niveau 2)", () => {
+    const r = parseBrainCommand(
+      reponse([
+        { intent: "recettes.proposer", contraintes: "  courgettes et feta  " },
+      ]),
+      CTX,
+    )
+    expect(r.actions[0]).toEqual({
+      intent: "recettes.proposer",
+      contraintes: "courgettes et feta",
+    })
+    expect(niveauAction(r.actions[0])).toBe(2)
+  })
+
+  it("ajouter_ingredients valide le recipe_id contre le contexte et résout la liste", () => {
+    const r = parseBrainCommand(
+      reponse([
+        {
+          intent: "recettes.ajouter_ingredients",
+          recipe_id: "re-rata",
+          liste_id: "co-auchan",
+          personnes: 3,
+        },
+      ]),
+      CTX,
+    )
+    expect(r.actions[0]).toEqual({
+      intent: "recettes.ajouter_ingredients",
+      recipe_id: "re-rata",
+      titre: "Ratatouille",
+      liste_id: "co-auchan",
+      personnes: 3,
+    })
+    expect(niveauAction(r.actions[0])).toBe(2)
+  })
+
+  it("ignore ajouter_ingredients avec un recipe_id halluciné (§2.12)", () => {
+    const r = parseBrainCommand(
+      reponse([
+        {
+          intent: "recettes.ajouter_ingredients",
+          recipe_id: "re-inventée",
+          liste_id: "co-auchan",
+        },
+      ]),
+      CTX,
+    )
+    expect(r.actions).toEqual([])
+  })
+
+  it("clarifie la liste pour ajouter_ingredients si indéterminable", () => {
+    const r = parseBrainCommand(
+      reponse([
+        {
+          intent: "recettes.ajouter_ingredients",
+          recipe_id: "re-rata",
+          liste_id: null,
+        },
+      ]),
+      CTX,
+    )
+    expect(r.actions).toEqual([])
+    expect(r.clarification).not.toBeNull()
+  })
+})
+
+describe("parseBrainCommand — planning.proposer_semaine (§8.4)", () => {
+  it("transporte les contraintes de semaine (niveau 2)", () => {
+    const r = parseBrainCommand(
+      reponse([
+        { intent: "planning.proposer_semaine", contraintes: "3 dîners végétariens" },
+      ]),
+      CTX,
+    )
+    expect(r.actions[0]).toEqual({
+      intent: "planning.proposer_semaine",
+      contraintes: "3 dîners végétariens",
+    })
+    expect(niveauAction(r.actions[0])).toBe(2)
+  })
+})

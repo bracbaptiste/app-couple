@@ -17,10 +17,13 @@
  * - La résolution d'ambiguïté de liste (§5.4) est DÉTERMINISTE et pilotée par le
  *   serveur : l'IA ne fabrique jamais la clarification elle-même.
  *
- * Portée de CE module : uniquement les intents de **Phase 2** (§5.2) —
- * `courses.*`, `bibliotheque.ajouter_article`, `taches.ajouter`/`cocher`,
- * `navigation.ouvrir`, `inconnu`. Les intents Recettes/Planning/Consultation
- * (Phase 6) ne sont pas encore routés.
+ * Portée de CE module : le catalogue COMPLET (§5.2) — Phase 2 (`courses.*`,
+ * `bibliotheque.ajouter_article`, `taches.*`, `navigation.ouvrir`, `inconnu`),
+ * le Planning (`planning.placer_repas`/`generer_liste`), et Phase 6 « l'IA
+ * partout » : `consultation.lire` (lecture seule), `recettes.proposer`,
+ * `recettes.ajouter_ingredients`, `planning.proposer_semaine`. La composition
+ * culinaire (Opus 4.8) vit dans des routes serveur dédiées ; ce module ne fait que
+ * STRUCTURER et VALIDER les ids contre le contexte relu sous RLS.
  */
 
 import { extraireBlocJson, UNITES, type Unite } from "@/lib/recipes/extraction"
@@ -35,6 +38,12 @@ import { normaliserNom } from "@/lib/utils/normalize-name-key"
 
 /** Nombre maximal d'actions dans un lot multi-intentions (§5.4.1). */
 export const MAX_ACTIONS = 5
+
+/** Longueur max d'un repas « texte libre » placé au planning (cf. planning/actions). */
+const REPAS_TEXTE_MAX = 80
+
+/** Longueur max d'une contrainte en langage naturel (proposer recette / semaine). */
+const CONTRAINTES_MAX = 500
 
 /** Réponse du Cerveau à une demande de suppression vocale (§5.2). */
 export const MESSAGE_SUPPRESSION =
@@ -71,6 +80,21 @@ export interface RecetteContext {
   titre: string
 }
 
+/** Les deux créneaux d'une case du planning (§8.1). */
+export type PlanningCreneau = "dejeuner" | "diner"
+
+/**
+ * Une case du planning DÉJÀ remplie cette semaine (§8.7). Injectée au prompt pour
+ * que le routeur « voie » la semaine courante (le routeur ne s'en sert pas pour
+ * résoudre : le placement passe toujours par la validation serveur). `label` = le
+ * repas affiché (titre de recette ou texte libre).
+ */
+export interface PlanningCaseContext {
+  date: string
+  creneau: PlanningCreneau
+  label: string
+}
+
 /**
  * Écran courant — SEULE information transmise par le client (§5.1). Sert
  * uniquement aux défauts d'ambiguïté (§5.4.4.2) ; jamais à contourner la RLS.
@@ -92,6 +116,8 @@ export interface BrainContext {
   libraryItems: LibraryItemContext[]
   /** Recettes du couple (id + titre). */
   recettes: RecetteContext[]
+  /** Cases du planning déjà remplies cette semaine (conscience du routeur, §8.7). */
+  planningSemaine?: PlanningCaseContext[]
   /** Écran courant fourni par le client (défauts d'ambiguïté). */
   ecran?: EcranContext | null
 }
@@ -122,6 +148,16 @@ export type NavCible =
   | { type: "liste"; liste_id: string }
   | { type: "recette"; recipe_id: string }
 
+/**
+ * Cible d'une consultation LECTURE SEULE (§5.2, `consultation.lire`). Résolue et
+ * validée côté serveur (ids réels, dates bornées) ; la lecture proprement dite
+ * (aucune écriture, §2.4) est faite par une action serveur dédiée.
+ */
+export type ConsultationCible =
+  | { type: "liste_courses"; liste_id: string; nom: string }
+  | { type: "repas_jour"; date: string }
+  | { type: "taches_jour"; date: string }
+
 /** Une action validée et résolue (§5.3). Union discriminée par `intent`. */
 export type BrainAction =
   | {
@@ -147,19 +183,72 @@ export type BrainAction =
       titre_normalise: string
       liste_id: string | null
     }
+  | {
+      intent: "planning.placer_repas"
+      /** Jour de la case, « YYYY-MM-DD » (résolu par l'IA, validé serveur). */
+      date: string
+      creneau: PlanningCreneau
+      /**
+       * Repas résolu CÔTÉ SERVEUR : une recette du carnet (titre reconnu) ou du
+       * texte libre. Le `recipe_id` est validé contre le contexte (jamais halluciné).
+       */
+      repas:
+        | { kind: "recette"; recipe_id: string; titre: string }
+        | { kind: "texte"; texte: string }
+    }
+  | { intent: "planning.generer_liste"; liste_id: string; personnes: number }
+  // --- Phase 6 (§5.2) : l'IA partout ---------------------------------------
+  | { intent: "consultation.lire"; cible: ConsultationCible }
+  | {
+      intent: "recettes.proposer"
+      /** Contraintes en langage naturel (« courgettes et feta »), passées à Opus. */
+      contraintes: string
+    }
+  | {
+      intent: "recettes.ajouter_ingredients"
+      /** Recette du carnet (id validé contre le contexte, comme navigation.ouvrir). */
+      recipe_id: string
+      titre: string
+      /** Liste de COURSES cible, résolue serveur (§5.4.4). */
+      liste_id: string
+      /** Nombre de personnes visé, ou null → défaut à l'écran de validation. */
+      personnes: number | null
+    }
+  | {
+      intent: "planning.proposer_semaine"
+      /** Contraintes de la semaine (« 3 dîners végétariens »), passées à Opus. */
+      contraintes: string
+    }
   | { intent: "navigation.ouvrir"; cible: NavCible }
   | { intent: "inconnu"; raison: "suppression" | null }
 
-/** Une option de clarification de liste (§5.3). */
+/**
+ * Une option de clarification (§5.3). Selon le type d'ambiguïté, elle porte
+ * l'id de liste (ambiguïté de liste) OU l'id de recette (ambiguïté de recette
+ * pour `planning.placer_repas`).
+ */
 export interface ClarificationOption {
   label: string
-  liste_id: string
+  liste_id?: string
+  recipe_id?: string
+}
+
+/** Placement de repas en attente d'un choix de recette (ambiguïté §8.7). */
+export interface PlacementEnAttente {
+  date: string
+  creneau: PlanningCreneau
 }
 
 /** Demande de clarification (§5.3) — générée côté serveur, jamais par l'IA. */
 export interface Clarification {
   question: string
   options: ClarificationOption[]
+  /**
+   * Présent quand l'ambiguïté porte sur une RECETTE à placer : le client
+   * complète alors ce placement avec la recette choisie (jamais de re-routage —
+   * la phrase resterait ambiguë). Absent = ambiguïté de liste (re-routage).
+   */
+  placement?: PlacementEnAttente
 }
 
 /** Résultat du routeur : soit des actions, soit une clarification (exclusif). */
@@ -172,13 +261,26 @@ export interface BrainCommandResult {
 export type NiveauAction = 1 | 2
 
 /**
- * Niveau (§6) d'une action exécutable : `taches.ajouter` = niveau 2 (écran de
- * validation V2.1 avant écriture) ; tout le reste du catalogue Phase 2 = niveau 1
- * (exécution directe + tampon). `inconnu` n'est pas exécutable et n'est pas classé
- * ici (traité en amont : suppression / incompréhension).
+ * Niveau (§6) d'une action exécutable. Niveau 2 (écran de validation avant
+ * écriture) : `taches.ajouter` (écran V2.1), `planning.generer_liste` (écran de
+ * génération), et les intents IA Phase 6 `recettes.proposer` (relecture V3),
+ * `recettes.ajouter_ingredients` (validation fusion) et `planning.proposer_semaine`
+ * (proposition refusable case par case). Tout le reste du catalogue = niveau 1
+ * (exécution directe + tampon), y compris `planning.placer_repas`.
+ * `consultation.lire` est en LECTURE SEULE (§2.4) : traité à part par le client,
+ * jamais exécuté ni journalisé. `inconnu` n'est pas exécutable et n'est pas classé
+ * ici (suppression / incompréhension).
  */
+const INTENTS_NIVEAU_2 = new Set<BrainAction["intent"]>([
+  "taches.ajouter",
+  "planning.generer_liste",
+  "recettes.proposer",
+  "recettes.ajouter_ingredients",
+  "planning.proposer_semaine",
+])
+
 export function niveauAction(a: BrainAction): NiveauAction {
-  return a.intent === "taches.ajouter" ? 2 : 1
+  return INTENTS_NIVEAU_2.has(a.intent) ? 2 : 1
 }
 
 /** Erreur dédiée : la réponse de l'IA n'est pas un JSON exploitable. */
@@ -206,6 +308,21 @@ function listerContexte(
   return items.length > 0
     ? items.map((i) => `- ${i.label} → "${i.id}"`).join("\n")
     : vide
+}
+
+/** Moment de la journée d'un créneau (« midi »/« soir »), pour les libellés humains. */
+const CRENEAU_MOMENT: Record<PlanningCreneau, string> = {
+  dejeuner: "midi",
+  diner: "soir",
+}
+
+/** Libellé humain d'une case (« jeudi soir »), pour le contexte planning du prompt. */
+function formaterCase(c: PlanningCaseContext): string {
+  const d = new Date(`${c.date}T00:00:00`)
+  const jour = Number.isNaN(d.getTime())
+    ? c.date
+    : new Intl.DateTimeFormat("fr-FR", { weekday: "long" }).format(d)
+  return `${jour} ${CRENEAU_MOMENT[c.creneau]}`
 }
 
 /**
@@ -247,6 +364,12 @@ export function construireBrainSystemPrompt(params: {
     ctx.libraryItems.length > 0
       ? ctx.libraryItems.map((i) => `- ${i.name}`).join("\n")
       : "(bibliothèque vide)"
+  const planningTexte =
+    ctx.planningSemaine && ctx.planningSemaine.length > 0
+      ? ctx.planningSemaine
+          .map((c) => `- ${formaterCase(c)} → ${c.label}`)
+          .join("\n")
+      : "(aucun repas planifié cette semaine)"
 
   const ecranTexte = ctx.ecran?.route
     ? `Écran courant : ${ctx.ecran.route}${
@@ -277,6 +400,8 @@ ${profilsTexte}
 ${recettesTexte}
 - Articles déjà connus en bibliothèque (pour t'aider à bien orthographier ; NE limite PAS les articles possibles à cette liste) :
 ${biblioTexte}
+- Planning de la semaine courante (cases déjà remplies) :
+${planningTexte}
 
 CATALOGUE D'INTENTIONS (n'utilise QUE ces intents ; tout le reste = "inconnu")
 - "courses.ajouter_article" : ajouter un ou plusieurs articles à une liste de courses. Champs : "liste_id" (id d'une liste de COURSES ou null si non précisée), "articles" (tableau de { "nom": string, "quantite": number|null, "unite": "g"|"ml"|"piece"|null }).
@@ -286,6 +411,12 @@ CATALOGUE D'INTENTIONS (n'utilise QUE ces intents ; tout le reste = "inconnu")
 - "taches.ajouter" : créer une tâche. Champs : "titre" (string, sans les indications de date/récurrence/personne déjà extraites), "due_date" ("YYYY-MM-DD" ou null), "recurrence" ({ "type": "daily"|"weekly"|"monthly", "interval": number>=1, "weekday": number|null (0=lundi … 6=dimanche, seulement pour weekly), "day_of_month": number|null (1–31, seulement pour monthly) } ou null), "assigne_profile_id" (id d'une personne ou null), "liste_id" (id d'une liste de TÂCHES ou null).
 - "taches.cocher" : cocher/terminer une tâche existante. Champs : "titre" (string, l'intitulé de la tâche), "liste_id" (ou null).
 - "navigation.ouvrir" : ouvrir un écran. Champ "cible" : soit { "type": "outil", "outil": "listes"|"bibliotheque"|"recettes"|"planning"|"profil" }, soit { "type": "liste", "liste_id": id }, soit { "type": "recette", "recipe_id": id }.
+- "planning.placer_repas" : placer un repas sur une case du planning (un jour + un créneau). Champs : "date" ("YYYY-MM-DD" — résous les jours relatifs « jeudi », « demain », « ce soir »… par rapport à aujourd'hui), "creneau" ("dejeuner" pour le midi, "diner" pour le soir), "repas" (string : le nom du repas TEL QUE DIT, ex. « ratatouille », « restes », « pizza surgelée »). NE fournis PAS d'id de recette : donne juste le nom, le serveur le reliera à une recette du carnet s'il en trouve une, sinon ce sera un repas « texte libre ».
+- "planning.generer_liste" : générer la liste de courses de la semaine à partir des repas-recette planifiés. Champs : "liste_id" (id d'une liste de COURSES ou null si non précisée), "personnes" (entier ou null → 2 par défaut).
+- "consultation.lire" : RÉPONDRE À UNE QUESTION (lecture seule, aucune modification). Champ "cible", un objet parmi : { "type": "liste_courses", "liste_id": id d'une liste de COURSES ou null } pour « qu'est-ce qu'il reste à acheter chez … ? » ; { "type": "repas_jour", "date": "YYYY-MM-DD" } pour « qu'est-ce qu'on mange … ? » ; { "type": "taches_jour", "date": "YYYY-MM-DD" } pour « qu'est-ce que j'ai à faire … ? ». Résous les jours relatifs comme pour le planning.
+- "recettes.proposer" : l'utilisateur veut que tu INVENTES une recette (« propose-moi une recette avec … », « une idée de dessert … »). Champ "contraintes" (string : la demande culinaire telle que dite, ex. « avec courgettes et feta »). Tu ne composes PAS la recette toi-même ici : renvoie juste les contraintes.
+- "recettes.ajouter_ingredients" : ajouter les ingrédients d'une recette EXISTANTE du carnet à une liste de courses. Champs : "recipe_id" (id d'une recette de la liste ci-dessus — obligatoire, jamais inventé), "liste_id" (id d'une liste de COURSES ou null), "personnes" (entier ou null).
+- "planning.proposer_semaine" : proposer un menu de semaine (« propose-moi une semaine avec 3 dîners végétariens »). Champ "contraintes" (string : les contraintes telles que dites). Tu ne composes PAS le menu ici : renvoie juste les contraintes.
 - "inconnu" : tout le reste. Si la demande est une SUPPRESSION (supprimer/vider une liste, supprimer une tâche, un article, une recette…), renvoie une action { "intent": "inconnu", "raison": "suppression" }. Sinon { "intent": "inconnu", "raison": null }.
 
 RÈGLES
@@ -436,6 +567,45 @@ function clarifierListe(lists: ListeContext[]): Clarification {
   }
 }
 
+/**
+ * Fabrique une clarification « Quelle recette ? » (§8.7) : plusieurs recettes du
+ * carnet portent le même titre. Le placement (jour + créneau) est joint pour que
+ * le client complète l'action une fois la recette choisie — jamais un re-routage
+ * (la phrase resterait ambiguë).
+ */
+function clarifierRecette(
+  matches: RecetteContext[],
+  placement: PlacementEnAttente,
+): Clarification {
+  return {
+    question: "Quelle recette ?",
+    options: matches.map((r) => ({ label: r.titre, recipe_id: r.id })),
+    placement,
+  }
+}
+
+/** Coerce un créneau vers le jeu fermé (« midi »/« soir » déjà mappés par l'IA). */
+function coerceCreneau(v: unknown): PlanningCreneau | null {
+  return v === "dejeuner" || v === "diner" ? v : null
+}
+
+/** Nombre de personnes pour la génération : entier > 0, sinon défaut 2 (§8.5.2). */
+function personnesOuDefaut(v: unknown): number {
+  const n = typeof v === "string" ? Number(v) : v
+  return typeof n === "number" && Number.isFinite(n) && n > 0 ? Math.round(n) : 2
+}
+
+/** Nombre de personnes optionnel : entier > 0, sinon null (défaut décidé à l'écran). */
+function personnesOuNull(v: unknown): number | null {
+  const n = typeof v === "string" ? Number(v) : v
+  return typeof n === "number" && Number.isFinite(n) && n > 0 ? Math.round(n) : null
+}
+
+/** Coerce une contrainte en langage naturel (bornée), sinon chaîne vide. */
+function coerceContraintes(v: unknown): string {
+  return typeof v === "string" ? v.trim().slice(0, CONTRAINTES_MAX) : ""
+}
+
 /* -------------------------------------------------------------- parsing */
 
 /**
@@ -478,6 +648,17 @@ export function parseBrainCommand(
   const listeIds = new Set(
     [...ctx.coursesLists, ...ctx.todoLists].map((l) => l.id),
   )
+  // Résolution recette PAR TITRE côté serveur (§8.7) : clé normalisée → recettes.
+  // Plusieurs recettes peuvent partager un titre → clarification (jamais un choix
+  // arbitraire). On ne fait jamais confiance à un id de recette venu de l'IA.
+  const recettesParCle = new Map<string, RecetteContext[]>()
+  for (const r of ctx.recettes) {
+    const cle = normaliserNom(r.titre)
+    if (!cle) continue
+    const bucket = recettesParCle.get(cle) ?? []
+    bucket.push(r)
+    recettesParCle.set(cle, bucket)
+  }
 
   const actions: BrainAction[] = []
 
@@ -546,6 +727,112 @@ export function parseBrainCommand(
             typeof a.liste_id === "string" && todoIds.has(a.liste_id)
               ? a.liste_id
               : null,
+        })
+        break
+      }
+      case "planning.placer_repas": {
+        // Date résolue par l'IA (jours relatifs), bornée serveur ; créneau au jeu fermé.
+        const dateIso = a.date
+        if (!estDateIsoValide(dateIso)) continue
+        const creneau = coerceCreneau(a.creneau)
+        if (!creneau) continue
+        const nomRepas = typeof a.repas === "string" ? a.repas.trim() : ""
+        if (!nomRepas) continue
+
+        // Résolution recette par titre (jamais un id de l'IA). Ambiguïté → clarif.
+        const cle = normaliserNom(nomRepas)
+        const matches = cle ? (recettesParCle.get(cle) ?? []) : []
+        if (matches.length > 1) {
+          return {
+            actions: [],
+            clarification: clarifierRecette(matches, { date: dateIso, creneau }),
+          }
+        }
+        const repas =
+          matches.length === 1
+            ? {
+                kind: "recette" as const,
+                recipe_id: matches[0].id,
+                titre: matches[0].titre,
+              }
+            : { kind: "texte" as const, texte: nomRepas.slice(0, REPAS_TEXTE_MAX) }
+        actions.push({ intent: "planning.placer_repas", date: dateIso, creneau, repas })
+        break
+      }
+      case "planning.generer_liste": {
+        // Action à conséquence : jamais de liste par défaut arbitraire (§5.4.5).
+        const liste_id = resoudreListe(ctx.coursesLists, a.liste_id, ctx.ecran)
+        if (!liste_id) {
+          return { actions: [], clarification: clarifierListe(ctx.coursesLists) }
+        }
+        actions.push({
+          intent: "planning.generer_liste",
+          liste_id,
+          personnes: personnesOuDefaut(a.personnes),
+        })
+        break
+      }
+      case "consultation.lire": {
+        // Lecture seule (§2.4) : on résout et borne la cible, sans jamais écrire.
+        const rawCible =
+          a.cible && typeof a.cible === "object"
+            ? (a.cible as Record<string, unknown>)
+            : null
+        if (!rawCible) continue
+        if (rawCible.type === "liste_courses") {
+          const liste_id = resoudreListe(ctx.coursesLists, rawCible.liste_id, ctx.ecran)
+          // Consultation d'UNE liste sans liste déterminable → clarification (§5.4.4).
+          if (!liste_id) {
+            return { actions: [], clarification: clarifierListe(ctx.coursesLists) }
+          }
+          const nom = ctx.coursesLists.find((l) => l.id === liste_id)?.name ?? ""
+          actions.push({
+            intent: "consultation.lire",
+            cible: { type: "liste_courses", liste_id, nom },
+          })
+        } else if (rawCible.type === "repas_jour" || rawCible.type === "taches_jour") {
+          if (!estDateIsoValide(rawCible.date)) continue
+          actions.push({
+            intent: "consultation.lire",
+            cible: { type: rawCible.type, date: rawCible.date },
+          })
+        }
+        break
+      }
+      case "recettes.proposer": {
+        // La composition (Opus) se fait côté client via la route /api/recipes/generate ;
+        // ici on ne transporte que la demande en langage naturel (§8.4).
+        actions.push({
+          intent: "recettes.proposer",
+          contraintes: coerceContraintes(a.contraintes),
+        })
+        break
+      }
+      case "recettes.ajouter_ingredients": {
+        // Recette du carnet : id validé contre le contexte (comme navigation.ouvrir),
+        // jamais accepté s'il est halluciné (§2.12).
+        const recipe_id = typeof a.recipe_id === "string" ? a.recipe_id : ""
+        if (!recipeIds.has(recipe_id)) continue
+        const titre = ctx.recettes.find((r) => r.id === recipe_id)?.titre ?? ""
+        // Action à conséquence : jamais de liste par défaut arbitraire (§5.4.5).
+        const liste_id = resoudreListe(ctx.coursesLists, a.liste_id, ctx.ecran)
+        if (!liste_id) {
+          return { actions: [], clarification: clarifierListe(ctx.coursesLists) }
+        }
+        actions.push({
+          intent: "recettes.ajouter_ingredients",
+          recipe_id,
+          titre,
+          liste_id,
+          personnes: personnesOuNull(a.personnes),
+        })
+        break
+      }
+      case "planning.proposer_semaine": {
+        // Menu de semaine (Opus) : composition côté serveur ensuite ; ici la demande.
+        actions.push({
+          intent: "planning.proposer_semaine",
+          contraintes: coerceContraintes(a.contraintes),
         })
         break
       }

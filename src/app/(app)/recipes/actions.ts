@@ -661,6 +661,104 @@ export async function addRecipeIngredientsToList(
   return { ok: true, recap, listId }
 }
 
+/**
+ * NIVEAU 2 (§6) — PRÉVISUALISATION de l'ajout des ingrédients d'une recette à une
+ * liste, pour la commande vocale `recettes.ajouter_ingredients` (§5.2). LECTURE
+ * SEULE : calcule la fusion EN MÉMOIRE (même logique que {@link
+ * addRecipeIngredientsToList} : ratio §8.2 recalculé serveur, fusion §6), sans rien
+ * écrire — l'écriture n'a lieu qu'après validation via `addRecipeIngredientsToList`.
+ * Renvoie le récap transparent + le nom de la liste + le nombre de personnes de
+ * base de la recette (défaut de l'écran de validation).
+ */
+export type PreviewIngredientsResult =
+  | { ok: true; recap: FusionRecapLigne[]; listName: string; basePersonnes: number }
+  | { ok: false; error: string }
+
+export async function previewRecipeIngredientsToList(
+  recipeId: string,
+  listId: string,
+  nombrePersonnes?: number,
+): Promise<PreviewIngredientsResult> {
+  const { supabase, coupleId } = await requireMembership()
+
+  const { data: recipe } = await supabase
+    .from("recipes")
+    .select("id, nombre_personnes")
+    .eq("id", recipeId)
+    .eq("couple_id", coupleId)
+    .maybeSingle()
+  if (!recipe) return { ok: false, error: "Recette introuvable." }
+
+  const base = entierPositif(recipe.nombre_personnes, 4)
+  const cible = entierPositif(nombrePersonnes, base)
+  const ratio = cible / base
+
+  const { data: list } = await supabase
+    .from("lists")
+    .select("id, name, kind")
+    .eq("id", listId)
+    .eq("couple_id", coupleId)
+    .maybeSingle()
+  if (!list) return { ok: false, error: "Liste introuvable." }
+  if (list.kind === "todo") {
+    return { ok: false, error: "Cette liste n’est pas une liste de courses." }
+  }
+
+  const { data: ingData } = await supabase
+    .from("recipe_ingredients")
+    .select("nom_affiche, quantite, unite, ordre")
+    .eq("recipe_id", recipe.id)
+    .order("ordre", { ascending: true })
+  const ingredients = ingData ?? []
+  if (ingredients.length === 0) {
+    return { ok: false, error: "Cette recette n’a aucun ingrédient." }
+  }
+
+  const recap: FusionRecapLigne[] = []
+  for (const ing of ingredients) {
+    const nom = (ing.nom_affiche ?? "").trim()
+    if (!nom) continue
+    const cle = normaliserNom(nom) // règle d'or §5 : jamais la clé stockée
+    if (!cle) continue
+
+    // Ligne active existante pour ce produit (find-only : aucune création ici).
+    const { data: matches } = await supabase
+      .from("library_items")
+      .select("id")
+      .eq("couple_id", coupleId)
+      .eq("nom_normalise", cle)
+      .order("usage_count", { ascending: false })
+      .limit(1)
+    const lib = matches?.[0]
+
+    let existantes: QuantiteBase[] = []
+    if (lib) {
+      const { data: lines } = await supabase
+        .from("list_items")
+        .select("quantities")
+        .eq("list_id", listId)
+        .eq("library_item_id", lib.id)
+        .eq("is_checked", false)
+        .limit(1)
+      existantes = parseQuantites(lines?.[0]?.quantities)
+    }
+
+    const unite: Unite | null = (UNITES as readonly string[]).includes(
+      ing.unite as string,
+    )
+      ? (ing.unite as Unite)
+      : null
+    const quantiteAjustee = ing.quantite === null ? null : ing.quantite * ratio
+    const { quantites, operation } = fusionnerQuantite(existantes, {
+      quantite: quantiteAjustee,
+      unite,
+    })
+    recap.push({ nom, operation, quantites })
+  }
+
+  return { ok: true, recap, listName: list.name, basePersonnes: base }
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Transfert d'un ingrédient vers la bibliothèque (§8.4 + §6)                  */
 /* -------------------------------------------------------------------------- */

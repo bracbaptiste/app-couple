@@ -24,6 +24,7 @@ import {
   type BrainUndo,
   type RecapLigne,
 } from "@/lib/brain/execute"
+import { undoBrainCommand } from "@/lib/brain/journal"
 import { useOnlineStatus } from "@/lib/offline/use-online-status"
 import {
   TaskReviewSheet,
@@ -31,6 +32,14 @@ import {
   type ReviewListOption,
   type ReviewMember,
 } from "@/components/todo/TaskReviewSheet"
+import {
+  GenerateWeekListSheet,
+  type CoursesListView,
+} from "@/app/(app)/planning/generate-week-list"
+import { ConsultationPanel } from "@/components/brain/consultation-panel"
+import { ProposeRecipeFlow } from "@/app/(app)/recipes/propose-recipe-flow"
+import { AddIngredientsFlow } from "@/app/(app)/recipes/add-ingredients-flow"
+import { WeekProposalFlow } from "@/app/(app)/planning/week-proposal-flow"
 
 /**
  * BrainListening — l'UI vocale du Cerveau (PRD V4 §5.4/§5.5, §4.2, §6).
@@ -61,6 +70,7 @@ const INTENTS_SERVEUR_NIVEAU_1 = new Set<BrainAction["intent"]>([
   "courses.decocher_article",
   "bibliotheque.ajouter_article",
   "taches.cocher",
+  "planning.placer_repas",
 ])
 
 /** Routes des outils (§2.1) pour `navigation.ouvrir` (niveau 1 client). */
@@ -85,9 +95,40 @@ type Step =
   | "clarify"
   | "recap"
   | "taskReview"
+  | "planningGen"
+  // Écrans IA Phase 6 (§5.2), montés hors modale : consultation lecture seule,
+  // proposition de recette, ajout d'ingrédients, proposition de semaine.
+  | "special"
   | "done"
   | "message"
   | "error"
+
+/**
+ * Intents IA Phase 6 (§5.2) montés dans un écran DÉDIÉ (hors modale du panneau) :
+ * consultation lecture seule, proposition de recette / de semaine (Opus), ajout
+ * d'ingrédients avec validation. Portés par `pendingSpecial` + step `special`.
+ */
+type SpecialAction = Extract<
+  BrainAction,
+  {
+    intent:
+      | "consultation.lire"
+      | "recettes.proposer"
+      | "recettes.ajouter_ingredients"
+      | "planning.proposer_semaine"
+  }
+>
+
+const INTENTS_SPECIAL = new Set<BrainAction["intent"]>([
+  "consultation.lire",
+  "recettes.proposer",
+  "recettes.ajouter_ingredients",
+  "planning.proposer_semaine",
+])
+
+function estSpecial(a: BrainAction): a is SpecialAction {
+  return INTENTS_SPECIAL.has(a.intent)
+}
 
 /** Contexte tâche renvoyé par la route pour monter l'écran V2.1 (§5.2). */
 type TaskContext = {
@@ -95,8 +136,20 @@ type TaskContext = {
   members: ReviewMember[]
 }
 
-/** Réponse complète du routeur : schéma §5.3 + contexte tâche. */
-type BrainResponse = BrainCommandResult & { taskContext?: TaskContext }
+/** Contexte planning renvoyé par la route pour monter l'écran de génération (§8.7). */
+type PlanningContext = {
+  coursesLists: CoursesListView[]
+  weekStartKey: string
+}
+
+/** Génération de la semaine en attente (liste cible pré-résolue + personnes). */
+type GenPending = { listId: string; personnes: number }
+
+/** Réponse complète du routeur : schéma §5.3 + contextes tâche / planning. */
+type BrainResponse = BrainCommandResult & {
+  taskContext?: TaskContext
+  planningContext?: PlanningContext
+}
 
 /** Une ligne du récap multi-intentions (§6), individuellement désactivable. */
 type RecapItem = { action: BrainAction; enabled: boolean }
@@ -122,6 +175,9 @@ export function BrainListening({ open, onClose, ecran }: Props) {
   // Niveau 1 exécuté : récap transparent + données d'annulation (toast ANNULER).
   const [recap, setRecap] = useState<RecapLigne[]>([])
   const [undo, setUndo] = useState<BrainUndo | null>(null)
+  // Id de la ligne de journal (§7) : l'ANNULER du toast passe par le même chemin
+  // que le ticket (statut → annulé). `null` = fallback annulation directe.
+  const [journalId, setJournalId] = useState<string | null>(null)
   const [undoing, setUndoing] = useState(false)
 
   // Ambiguïté de liste (§5.3).
@@ -130,6 +186,17 @@ export function BrainListening({ open, onClose, ecran }: Props) {
   // Récap multi-intentions (§6) + contexte pour l'écran V2.1.
   const [items, setItems] = useState<RecapItem[]>([])
   const [taskContext, setTaskContext] = useState<TaskContext | null>(null)
+
+  // Génération de la semaine (§8.7, niveau 2) : contexte + cible pré-résolue.
+  const [planningContext, setPlanningContext] = useState<PlanningContext | null>(null)
+  const [gen, setGen] = useState<GenPending | null>(null)
+  // Génération à ouvrir APRÈS les tâches, dans un lot mixte (comme navPending).
+  const genPending = useRef<GenPending | null>(null)
+
+  // Écran IA Phase 6 en cours (consultation / propositions / ingrédients).
+  const [pendingSpecial, setPendingSpecial] = useState<SpecialAction | null>(null)
+  // Écran IA différé après les tâches, dans un lot mixte (un seul par lot).
+  const specialPending = useRef<SpecialAction | null>(null)
 
   // File d'écrans de validation V2.1 (taches.ajouter à valider un par un).
   const [taskQueue, setTaskQueue] = useState<BrainAction[]>([])
@@ -169,24 +236,40 @@ export function BrainListening({ open, onClose, ecran }: Props) {
   /* --------------------------------------------------------- exécutions */
 
   /** Exécute un lot de niveau 1 serveur, puis affiche le tampon + toast ANNULER. */
-  const executerNiveau1 = useCallback(async (actions: BrainAction[]) => {
-    setStep("thinking")
-    try {
-      const exec = await executeBrainActions(actions)
-      if (!exec.ok) {
-        setMessage(exec.error)
+  const executerNiveau1 = useCallback(
+    async (actions: BrainAction[], texteDicte: string) => {
+      setStep("thinking")
+      try {
+        const exec = await executeBrainActions(actions, texteDicte)
+        if (!exec.ok) {
+          setMessage(exec.error)
+          setStep("error")
+          return false
+        }
+        setRecap(exec.recap)
+        setUndo(exec.undo)
+        setJournalId(exec.journalId)
+        setStep("done")
+        return true
+      } catch {
+        setMessage("L'exécution a échoué. Réessaie.")
         setStep("error")
         return false
       }
-      setRecap(exec.recap)
-      setUndo(exec.undo)
-      setStep("done")
-      return true
-    } catch {
-      setMessage("L'exécution a échoué. Réessaie.")
-      setStep("error")
-      return false
-    }
+    },
+    [],
+  )
+
+  /** Ouvre l'écran de génération de la semaine (§8.7, niveau 2), cible pré-résolue. */
+  const ouvrirGeneration = useCallback((g: GenPending) => {
+    setGen(g)
+    setStep("planningGen")
+  }, [])
+
+  /** Ouvre un écran IA Phase 6 dédié (consultation / propositions / ingrédients). */
+  const ouvrirSpecial = useCallback((a: SpecialAction) => {
+    setPendingSpecial(a)
+    setStep("special")
   }, [])
 
   /** Ouvre l'écran V2.1 pour la 1re tâche de la file (ou termine le lot). */
@@ -198,7 +281,20 @@ export function BrainListening({ open, onClose, ecran }: Props) {
         setStep("taskReview")
         return
       }
-      // File vide : navigation différée, sinon tampon (si un niveau 1 a tourné).
+      // File vide : génération de la semaine différée (niveau 2), puis un écran IA
+      // Phase 6 différé, puis navigation, sinon tampon (si un niveau 1 a tourné).
+      if (genPending.current) {
+        const g = genPending.current
+        genPending.current = null
+        ouvrirGeneration(g)
+        return
+      }
+      if (specialPending.current) {
+        const a = specialPending.current
+        specialPending.current = null
+        ouvrirSpecial(a)
+        return
+      }
       if (navPending.current) {
         const href = navHref(navPending.current)
         navPending.current = null
@@ -208,14 +304,14 @@ export function BrainListening({ open, onClose, ecran }: Props) {
       }
       setStep((s) => (s === "taskReview" ? "done" : s))
     },
-    [close, router],
+    [close, router, ouvrirGeneration, ouvrirSpecial],
   )
 
   /* -------------------------------------------------- classement du lot */
 
   /** Classe le résultat du routeur et embranche vers le bon écran (§6). */
   const traiterResultat = useCallback(
-    (result: BrainResponse) => {
+    (result: BrainResponse, phrase: string) => {
       // Ambiguïté de liste : question à choix, jamais de choix arbitraire (§5.3).
       if (result.clarification) {
         setClarify(result.clarification)
@@ -241,6 +337,7 @@ export function BrainListening({ open, onClose, ecran }: Props) {
       }
 
       setTaskContext(result.taskContext ?? null)
+      setPlanningContext(result.planningContext ?? null)
 
       // Chemin le plus simple : une seule action.
       if (reelles.length === 1) {
@@ -250,13 +347,24 @@ export function BrainListening({ open, onClose, ecran }: Props) {
           ouvrirFileTaches([a])
           return
         }
+        // Génération de la semaine (§8.7, niveau 2) : écran de validation pré-rempli.
+        if (a.intent === "planning.generer_liste") {
+          ouvrirGeneration({ listId: a.liste_id, personnes: a.personnes })
+          return
+        }
+        // Écrans IA Phase 6 (§5.2) : consultation lecture seule, propositions,
+        // ajout d'ingrédients — chacun a son propre écran dédié.
+        if (estSpecial(a)) {
+          ouvrirSpecial(a)
+          return
+        }
         if (a.intent === "navigation.ouvrir") {
           const href = navHref(a.cible)
           close()
           router.push(href)
           return
         }
-        void executerNiveau1([a])
+        void executerNiveau1([a], phrase)
         return
       }
 
@@ -264,7 +372,7 @@ export function BrainListening({ open, onClose, ecran }: Props) {
       setItems(reelles.map((action) => ({ action, enabled: true })))
       setStep("recap")
     },
-    [close, router, executerNiveau1, ouvrirFileTaches],
+    [close, router, executerNiveau1, ouvrirFileTaches, ouvrirGeneration, ouvrirSpecial],
   )
 
   /** Appelle le routeur avec un écran donné (surchargé lors d'une clarification). */
@@ -294,7 +402,7 @@ export function BrainListening({ open, onClose, ecran }: Props) {
         setStep("error")
         return
       }
-      traiterResultat(result)
+      traiterResultat(result, phrase)
     },
     [traiterResultat],
   )
@@ -318,6 +426,23 @@ export function BrainListening({ open, onClose, ecran }: Props) {
     void envoyer(phrase, { route: ecran?.route ?? null, liste_id: listeId })
   }
 
+  /**
+   * Choix d'une recette pour un placement ambigu (§8.7) : on complète directement
+   * le placement en attente avec la recette choisie (pas de re-routage — la phrase
+   * resterait ambiguë), puis on exécute en niveau 1 (tampon + ANNULER).
+   */
+  function choisirRecette(recipeId: string, titre: string) {
+    if (!clarify?.placement) return
+    const action: BrainAction = {
+      intent: "planning.placer_repas",
+      date: clarify.placement.date,
+      creneau: clarify.placement.creneau,
+      repas: { kind: "recette", recipe_id: recipeId, titre },
+    }
+    setClarify(null)
+    void executerNiveau1([action], text.trim().slice(0, TEXT_MAX))
+  }
+
   /** « Valider » du récap : exécute le niveau 1, puis enchaîne les écrans V2.1. */
   async function validerRecap() {
     const retenues = items.filter((i) => i.enabled).map((i) => i.action)
@@ -332,9 +457,22 @@ export function BrainListening({ open, onClose, ecran }: Props) {
       derniereNav && derniereNav.intent === "navigation.ouvrir"
         ? derniereNav.cible
         : null
+    // Génération de la semaine (niveau 2) : différée après les tâches (§6). Une
+    // seule par lot (la dernière l'emporte). Ouverte par `ouvrirFileTaches`.
+    const derniereGen = retenues
+      .filter((a) => a.intent === "planning.generer_liste")
+      .at(-1)
+    genPending.current =
+      derniereGen && derniereGen.intent === "planning.generer_liste"
+        ? { listId: derniereGen.liste_id, personnes: derniereGen.personnes }
+        : null
+    // Écran IA Phase 6 différé (§5.2) : un seul par lot (le premier l'emporte),
+    // ouvert après les tâches (comme la génération). Cas mono-intention traité en
+    // amont ; en lot mixte, on ne monte qu'un écran dédié à la fois.
+    specialPending.current = retenues.find(estSpecial) ?? null
 
     if (serveur.length > 0) {
-      const ok = await executerNiveau1(serveur)
+      const ok = await executerNiveau1(serveur, text.trim().slice(0, TEXT_MAX))
       if (!ok) return // erreur affichée ; on n'enchaîne pas.
     }
     ouvrirFileTaches(taches)
@@ -363,19 +501,105 @@ export function BrainListening({ open, onClose, ecran }: Props) {
     ouvrirFileTaches(reste)
   }
 
-  /** ANNULER (§6) : défait le lot niveau 1 via ses données d'annulation. */
+  /**
+   * ANNULER (§6/§7) : défait le lot niveau 1. Chemin nominal = la ligne de
+   * journal (`undoBrainCommand`) → même annulation que depuis le ticket (statut
+   * `fait` → `annule`, rayée, temps réel). Fallback = annulation directe si la
+   * ligne de journal n'a pas pu être écrite (`journalId` null).
+   */
   async function annuler() {
-    if (!undo || undoing) return
+    if (undoing) return
+    if (!journalId && !undo) return
     setUndoing(true)
     try {
-      await undoBrainActions(undo)
+      if (journalId) await undoBrainCommand(journalId)
+      else if (undo) await undoBrainActions(undo)
     } catch {
-      // Échec d'annulation : on ferme quand même (le journal Phase 3 fiabilisera).
+      // Échec d'annulation : on ferme quand même (rattrapable depuis le ticket).
     }
     close()
   }
 
+  /** « Voir le ticket » (§7) : ferme le panneau et ouvre le journal du Cerveau. */
+  function voirTicket() {
+    close()
+    router.push("/profile/journal")
+  }
+
   if (!open || typeof document === "undefined") return null
+
+  // Écran de génération de la semaine (§8.7, niveau 2) : sheet EXISTANT du prompt
+  // 10, monté hors de la modale du panneau, liste cible pré-résolue + auto-preview
+  // (rien n'est écrit avant validation, §6).
+  if (step === "planningGen" && gen) {
+    if (!planningContext) {
+      return renderMessagePanel(
+        "Aïe",
+        "Impossible d'ouvrir la génération de la semaine.",
+        close,
+      )
+    }
+    return (
+      <GenerateWeekListSheet
+        open
+        onOpenChange={(next) => {
+          if (!next) close()
+        }}
+        coursesLists={planningContext.coursesLists}
+        weekStartKey={planningContext.weekStartKey}
+        initialListId={gen.listId}
+        initialPersonnes={gen.personnes}
+        autoPreview
+        brainTexteDicte={text.trim().slice(0, TEXT_MAX)}
+      />
+    )
+  }
+
+  // Écrans IA Phase 6 (§5.2), montés séparément, hors de la modale du panneau. Le
+  // texte dicté est transmis pour journaliser les propositions acceptées (§7).
+  if (step === "special" && pendingSpecial) {
+    const phrase = text.trim().slice(0, TEXT_MAX)
+    switch (pendingSpecial.intent) {
+      case "consultation.lire":
+        // Lecture seule (§2.4) : aucun écriture, pas de journal.
+        return <ConsultationPanel cible={pendingSpecial.cible} onClose={close} />
+      case "recettes.proposer":
+        return (
+          <ProposeRecipeFlow
+            contraintes={pendingSpecial.contraintes}
+            texteDicte={phrase}
+            onClose={close}
+          />
+        )
+      case "recettes.ajouter_ingredients":
+        return (
+          <AddIngredientsFlow
+            recipeId={pendingSpecial.recipe_id}
+            titre={pendingSpecial.titre}
+            listId={pendingSpecial.liste_id}
+            personnes={pendingSpecial.personnes}
+            texteDicte={phrase}
+            onClose={close}
+          />
+        )
+      case "planning.proposer_semaine":
+        if (!planningContext) {
+          return renderMessagePanel(
+            "Aïe",
+            "Impossible d'ouvrir la proposition de semaine.",
+            close,
+          )
+        }
+        return (
+          <WeekProposalFlow
+            contraintes={pendingSpecial.contraintes}
+            weekStartKey={planningContext.weekStartKey}
+            texteDicte={phrase}
+            onClose={close}
+          />
+        )
+    }
+  }
 
   // Écran V2.1 (§5.2, niveau 2) : monté séparément, hors de la modale du panneau.
   if (step === "taskReview" && taskContext && taskQueue.length > 0) {
@@ -580,14 +804,22 @@ export function BrainListening({ open, onClose, ecran }: Props) {
               </button>
             </div>
             <p className="font-body text-[13px] leading-snug text-ink-soft">
-              Choisis une liste, ou redis le nom.
+              {clarify.placement
+                ? "Choisis une recette, ou redis le nom."
+                : "Choisis une liste, ou redis le nom."}
             </p>
             <div className="flex flex-wrap gap-2">
               {clarify.options.map((opt) => (
                 <button
-                  key={opt.liste_id}
+                  key={opt.recipe_id ?? opt.liste_id ?? opt.label}
                   type="button"
-                  onClick={() => choisirListe(opt.liste_id)}
+                  onClick={() =>
+                    clarify.placement && opt.recipe_id
+                      ? choisirRecette(opt.recipe_id, opt.label)
+                      : opt.liste_id
+                        ? choisirListe(opt.liste_id)
+                        : undefined
+                  }
                   className="inline-flex min-h-11 items-center rounded-[8px] border-2 border-ink bg-paper-light px-3 py-1.5 font-mono text-[12px] font-bold uppercase tracking-wide text-ink shadow-riso-sauge outline-none transition-transform focus-visible:ring-2 focus-visible:ring-ink active:translate-x-px active:translate-y-px"
                 >
                   {opt.label}
@@ -703,25 +935,37 @@ export function BrainListening({ open, onClose, ecran }: Props) {
                   </li>
                 ))}
               </ul>
-              <div className="mt-3 flex justify-end gap-2">
-                <RisoButton
-                  variant="secondary"
-                  size="sm"
-                  onClick={annuler}
-                  disabled={undoing || !undo}
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                {/* Voir le ticket (§7) : accès au journal depuis le toast. */}
+                <button
+                  type="button"
+                  onClick={voirTicket}
+                  className="inline-flex min-h-9 items-center rounded-[8px] px-1 font-mono text-[11px] font-bold uppercase tracking-wide text-ink-soft underline decoration-dotted underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ink"
                 >
-                  {undoing ? (
-                    <Loader2
-                      className="size-4 animate-spin motion-reduce:animate-none"
-                      aria-hidden
-                    />
-                  ) : (
-                    "Annuler"
+                  Voir le ticket
+                </button>
+                <div className="flex justify-end gap-2">
+                  {(undo?.ops.length ?? 0) > 0 && (
+                    <RisoButton
+                      variant="secondary"
+                      size="sm"
+                      onClick={annuler}
+                      disabled={undoing}
+                    >
+                      {undoing ? (
+                        <Loader2
+                          className="size-4 animate-spin motion-reduce:animate-none"
+                          aria-hidden
+                        />
+                      ) : (
+                        "Annuler"
+                      )}
+                    </RisoButton>
                   )}
-                </RisoButton>
-                <RisoButton size="sm" onClick={close}>
-                  OK
-                </RisoButton>
+                  <RisoButton size="sm" onClick={close}>
+                    OK
+                  </RisoButton>
+                </div>
               </div>
             </div>
           </div>
@@ -786,6 +1030,24 @@ function decrireAction(a: BrainAction): string {
       return `Cocher la tâche : ${a.titre}`
     case "taches.ajouter":
       return `Nouvelle tâche : ${a.titre}`
+    case "planning.placer_repas":
+      return `Planning : ${
+        a.repas.kind === "recette" ? a.repas.titre : a.repas.texte
+      }`
+    case "planning.generer_liste":
+      return "Générer la liste de la semaine"
+    case "consultation.lire":
+      return a.cible.type === "liste_courses"
+        ? `Voir ce qu'il reste dans « ${a.cible.nom} »`
+        : a.cible.type === "repas_jour"
+          ? "Voir le menu du jour"
+          : "Voir les tâches du jour"
+    case "recettes.proposer":
+      return `Proposer une recette${a.contraintes ? ` : ${a.contraintes}` : ""}`
+    case "recettes.ajouter_ingredients":
+      return `Ingrédients de « ${a.titre} » → liste`
+    case "planning.proposer_semaine":
+      return `Proposer une semaine${a.contraintes ? ` : ${a.contraintes}` : ""}`
     case "navigation.ouvrir":
       return "Ouvrir un écran"
     default:

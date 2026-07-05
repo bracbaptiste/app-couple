@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
 
 import { createClient } from "@/lib/supabase/server"
+import { type Json } from "@/types/database"
 import { addDays, parseDateKey, startOfWeek, toDateKey } from "@/lib/planning/week"
 import { normaliserNom } from "@/lib/utils/normalize-name-key"
 import { guessCategory } from "@/lib/utils/guess-category"
@@ -355,6 +356,14 @@ export type CommitWeekListResult =
   | { ok: true; apercu: GenerationApercu }
   | { ok: false; error: string }
 
+/**
+ * Origine « Cerveau » d'une génération (§8.7) : quand la commande vient de la voix,
+ * on JOURNALISE la génération dans le ticket de caisse (§7 — périmètre : commandes
+ * du Cerveau uniquement ; la génération TACTILE, elle, n'y figure jamais). La
+ * phrase dictée est journalisée telle quelle.
+ */
+export type BrainGenerationOrigin = { texteDicte: string }
+
 /* --- Rassemblement des besoins (LECTURE SEULE, partagé preview/commit) ----- */
 
 /** Un besoin agrégé + l'état courant de sa ligne cible (lu, jamais modifié). */
@@ -654,6 +663,8 @@ export async function commitWeekList(
   listId: string,
   personnes: number | undefined,
   weekStartKey: string,
+  /** Présent si la génération est déclenchée par le Cerveau (§8.7) → journalisée (§7). */
+  brain?: BrainGenerationOrigin,
 ): Promise<CommitWeekListResult> {
   const { supabase, userId, coupleId } = await requireMembership()
 
@@ -734,6 +745,27 @@ export async function commitWeekList(
   revalidatePath(`/lists/${listId}`)
   revalidatePath("/planning")
 
+  // Journalisation (§7) UNIQUEMENT si la commande vient du Cerveau (§8.7). Le
+  // ticket est descriptif ; `undo_data` est null : une génération ne s'annule pas
+  // en bloc via le journal — sa modification passe par le retrait ciblé (§8.6).
+  const aEcrire = creees.length + fusionnees.length
+  if (brain && aEcrire > 0) {
+    const lignes = [
+      ...creees.map((l) => ({ nom: l.nom, detail: "ajouté" })),
+      ...fusionnees.map((l) => ({ nom: l.nom, detail: "fusionné" })),
+    ]
+    const groups = [{ label: `Liste « ${data.list.name} » générée`, lignes }]
+    await supabase.from("brain_commands").insert({
+      couple_id: coupleId,
+      user_id: userId,
+      texte_dicte: brain.texteDicte.trim().slice(0, 1000),
+      actions: groups as unknown as Json,
+      statut: "fait",
+      undo_data: null,
+    })
+    revalidatePath("/profile/journal")
+  }
+
   return {
     ok: true,
     apercu: {
@@ -743,7 +775,7 @@ export async function commitWeekList(
       creees,
       fusionnees,
       ignores: data.ignores,
-      aEcrire: creees.length + fusionnees.length,
+      aEcrire,
     },
   }
 }

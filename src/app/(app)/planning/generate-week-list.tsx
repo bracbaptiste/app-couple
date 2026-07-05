@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { Dialog } from "@base-ui/react/dialog"
 import { Check, Minus, Plus, ShoppingCart, Sparkles } from "lucide-react"
-import { useState, useTransition } from "react"
+import { useEffect, useRef, useState, useTransition } from "react"
 
 import { RisoButton, risoButtonVariants } from "@/components/ui/riso-button"
 import { useSwipeDismiss } from "@/lib/hooks/useSwipeDismiss"
@@ -42,58 +42,103 @@ export function GenerateWeekList({
   weekStartKey: string
 }) {
   const [open, setOpen] = useState(false)
-  const [seq, setSeq] = useState(0)
-
-  function openSheet() {
-    setSeq((n) => n + 1)
-    setOpen(true)
-  }
-
-  const { offset, dragging, releasing, onTransitionEnd, swipeHandlers } =
-    useSwipeDismiss({ onDismiss: () => setOpen(false) })
 
   return (
     <>
       <RisoButton
         variant="secondary"
-        onClick={openSheet}
+        onClick={() => setOpen(true)}
         className="h-11 w-full text-[13px]"
       >
         <Sparkles className="size-4" strokeWidth={2.5} aria-hidden />
         Générer la liste de la semaine
       </RisoButton>
 
-      <Dialog.Root open={open} onOpenChange={(next) => !next && setOpen(false)}>
-        <Dialog.Portal>
-          <Dialog.Backdrop className="fixed inset-0 z-40 bg-ink/55 transition-opacity data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 motion-reduce:transition-none" />
-          <Dialog.Popup
-            className={cn(
-              "fixed inset-x-0 bottom-0 z-50 mx-auto flex max-h-[88vh] w-full max-w-sm touch-none flex-col",
-              "rounded-t-[22px] border-t-[2.5px] border-ink bg-paper px-[22px] pb-7 pt-[22px]",
-              "transition-transform data-[ending-style]:translate-y-full data-[starting-style]:translate-y-full motion-reduce:transition-none",
-            )}
-            initialFocus={false}
-            style={
-              dragging
-                ? { transform: `translateY(${offset}px)`, transition: "none" }
-                : releasing
-                  ? { transform: `translateY(${offset}px)` }
-                  : undefined
-            }
-            onTransitionEnd={onTransitionEnd}
-            {...swipeHandlers}
-          >
-            <div className="mx-auto mb-[18px] h-[5px] w-12 shrink-0 rounded-full bg-ink" />
-            <GenerateContent
-              key={seq}
-              coursesLists={coursesLists}
-              weekStartKey={weekStartKey}
-              onClose={() => setOpen(false)}
-            />
-          </Dialog.Popup>
-        </Dialog.Portal>
-      </Dialog.Root>
+      <GenerateWeekListSheet
+        open={open}
+        onOpenChange={setOpen}
+        coursesLists={coursesLists}
+        weekStartKey={weekStartKey}
+      />
     </>
+  )
+}
+
+/**
+ * Le sheet de génération, PILOTABLE (open contrôlé) : réutilisé par le bouton
+ * tactile ci-dessus ET par le Cerveau (`planning.generer_liste`, prompt 12). Le
+ * contenu se remonte à chaque ouverture (`seq`) pour repartir d'un état vierge.
+ *
+ * Options du vocal (§8.7) : `initialListId` pré-résout la liste cible (« … dans
+ * Auchan »), `initialPersonnes` la fixe (défaut 2), `autoPreview` saute l'étape
+ * de configuration et lance directement le récapitulatif niveau 2 — RIEN n'est
+ * écrit avant validation (§6).
+ */
+export function GenerateWeekListSheet({
+  open,
+  onOpenChange,
+  coursesLists,
+  weekStartKey,
+  initialListId,
+  initialPersonnes,
+  autoPreview,
+  brainTexteDicte,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  coursesLists: CoursesListView[]
+  weekStartKey: string
+  initialListId?: string
+  initialPersonnes?: number
+  autoPreview?: boolean
+  brainTexteDicte?: string
+}) {
+  // Remonte le contenu à chaque (ré)ouverture → l'état repart à zéro sans reset manuel.
+  const [seq, setSeq] = useState(0)
+  const wasOpen = useRef(false)
+  useEffect(() => {
+    if (open && !wasOpen.current) setSeq((n) => n + 1)
+    wasOpen.current = open
+  }, [open])
+
+  const { offset, dragging, releasing, onTransitionEnd, swipeHandlers } =
+    useSwipeDismiss({ onDismiss: () => onOpenChange(false) })
+
+  return (
+    <Dialog.Root open={open} onOpenChange={(next) => !next && onOpenChange(false)}>
+      <Dialog.Portal>
+        <Dialog.Backdrop className="fixed inset-0 z-40 bg-ink/55 transition-opacity data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 motion-reduce:transition-none" />
+        <Dialog.Popup
+          className={cn(
+            "fixed inset-x-0 bottom-0 z-50 mx-auto flex max-h-[88vh] w-full max-w-sm touch-none flex-col",
+            "rounded-t-[22px] border-t-[2.5px] border-ink bg-paper px-[22px] pb-7 pt-[22px]",
+            "transition-transform data-[ending-style]:translate-y-full data-[starting-style]:translate-y-full motion-reduce:transition-none",
+          )}
+          initialFocus={false}
+          style={
+            dragging
+              ? { transform: `translateY(${offset}px)`, transition: "none" }
+              : releasing
+                ? { transform: `translateY(${offset}px)` }
+                : undefined
+          }
+          onTransitionEnd={onTransitionEnd}
+          {...swipeHandlers}
+        >
+          <div className="mx-auto mb-[18px] h-[5px] w-12 shrink-0 rounded-full bg-ink" />
+          <GenerateContent
+            key={seq}
+            coursesLists={coursesLists}
+            weekStartKey={weekStartKey}
+            initialListId={initialListId}
+            initialPersonnes={initialPersonnes}
+            autoPreview={autoPreview}
+            brainTexteDicte={brainTexteDicte}
+            onClose={() => onOpenChange(false)}
+          />
+        </Dialog.Popup>
+      </Dialog.Portal>
+    </Dialog.Root>
   )
 }
 
@@ -104,18 +149,46 @@ export function GenerateWeekList({
 function GenerateContent({
   coursesLists,
   weekStartKey,
+  initialListId,
+  initialPersonnes,
+  autoPreview,
+  brainTexteDicte,
   onClose,
 }: {
   coursesLists: CoursesListView[]
   weekStartKey: string
+  initialListId?: string
+  initialPersonnes?: number
+  autoPreview?: boolean
+  brainTexteDicte?: string
   onClose: () => void
 }) {
   const [step, setStep] = useState<Step>("config")
-  const [listId, setListId] = useState<string>(coursesLists[0]?.id ?? "")
-  const [personnes, setPersonnes] = useState(2) // défaut 2 (§8.5.2)
+  // Liste cible : celle pré-résolue par le vocal si elle existe bien, sinon la 1re.
+  const initialResolved =
+    initialListId && coursesLists.some((l) => l.id === initialListId)
+      ? initialListId
+      : undefined
+  const [listId, setListId] = useState<string>(
+    initialResolved ?? coursesLists[0]?.id ?? "",
+  )
+  const [personnes, setPersonnes] = useState(
+    initialPersonnes && initialPersonnes > 0 ? Math.round(initialPersonnes) : 2,
+  ) // défaut 2 (§8.5.2)
   const [apercu, setApercu] = useState<GenerationApercu | null>(null)
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState<string | undefined>()
+
+  // Vocal (§8.7) : liste pré-résolue + auto-preview → on saute la configuration et
+  // on lance directement le récapitulatif niveau 2 (rien d'écrit avant validation).
+  const autoRan = useRef(false)
+  useEffect(() => {
+    if (!autoPreview || autoRan.current) return
+    if (!listId) return
+    autoRan.current = true
+    lancerApercu()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoPreview, listId])
 
   // Aucune liste de courses : rien à cibler.
   if (coursesLists.length === 0) {
@@ -150,7 +223,10 @@ function GenerateContent({
   function valider() {
     setError(undefined)
     startTransition(async () => {
-      const res = await commitWeekList(listId, personnes, weekStartKey)
+      // Vocal (§8.7) : on transmet la phrase dictée → la génération est journalisée
+      // (§7). En tactile, `brainTexteDicte` est absent → aucune ligne de ticket.
+      const brain = brainTexteDicte ? { texteDicte: brainTexteDicte } : undefined
+      const res = await commitWeekList(listId, personnes, weekStartKey, brain)
       if (res.ok) {
         setApercu(res.apercu)
         setStep("succes")

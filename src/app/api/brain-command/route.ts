@@ -8,9 +8,16 @@ import {
   type EcranContext,
   type LibraryItemContext,
   type ListeContext,
+  type PlanningCaseContext,
   type RecetteContext,
 } from "@/lib/brain/command-parsing"
 import { jourCourantDansFuseau, type ProfileContext } from "@/lib/tasks/voice-parsing"
+import {
+  addDays,
+  startOfWeek,
+  parseDateKey,
+  toDateKey,
+} from "@/lib/planning/week"
 import { createClient } from "@/lib/supabase/server"
 
 /**
@@ -91,30 +98,44 @@ export async function POST(request: Request) {
   // `mode: "task"` pour ancrer l'interprétation sur les intents `taches.*`.
   const hint = o.mode === "task" ? ("task" as const) : null
 
-  // 4. Contexte relu CÔTÉ SERVEUR sous RLS (jamais fourni par le client) :
-  //    listes (courses + to-do), les deux profils, articles bibliothèque
-  //    (résolution des noms), recettes (id + titre). Le planning arrive en
-  //    Phase 4 (table `meal_slots` absente aujourd'hui) : contexte vide ici.
-  const [listsRes, profilesRes, libraryRes, recipesRes] = await Promise.all([
-    supabase
-      .from("lists")
-      .select("id, name, kind")
-      .order("position", { ascending: true }),
-    supabase
-      .from("profiles")
-      .select("id, display_name, color")
-      .eq("couple_id", profile.couple_id),
-    supabase
-      .from("library_items")
-      .select("id, name, nom_normalise")
-      .eq("couple_id", profile.couple_id)
-      .order("usage_count", { ascending: false })
-      .limit(BIBLIO_MAX),
-    supabase
-      .from("recipes")
-      .select("id, titre")
-      .eq("couple_id", profile.couple_id),
-  ])
+  // Date du jour résolue côté serveur (fuseau Europe/Paris) : les dates relatives
+  //    (« demain », « jeudi »…) sont calées dessus (§5.4.6). On en dérive aussi la
+  //    semaine courante (lundi → dimanche) pour le contexte planning + la génération.
+  const jour = jourCourantDansFuseau()
+  const monday = startOfWeek(parseDateKey(jour.iso) ?? new Date())
+  const weekStartKey = toDateKey(monday)
+  const weekEndKey = toDateKey(addDays(monday, 6))
+
+  // 4. Contexte relu CÔTÉ SERVEUR sous RLS (jamais fourni par le client) : listes
+  //    (courses + to-do), les deux profils, articles bibliothèque (résolution des
+  //    noms), recettes (id + titre) et le planning de la semaine courante (§8.7).
+  const [listsRes, profilesRes, libraryRes, recipesRes, mealsRes] =
+    await Promise.all([
+      supabase
+        .from("lists")
+        .select("id, name, kind")
+        .order("position", { ascending: true }),
+      supabase
+        .from("profiles")
+        .select("id, display_name, color")
+        .eq("couple_id", profile.couple_id),
+      supabase
+        .from("library_items")
+        .select("id, name, nom_normalise")
+        .eq("couple_id", profile.couple_id)
+        .order("usage_count", { ascending: false })
+        .limit(BIBLIO_MAX),
+      supabase
+        .from("recipes")
+        .select("id, titre")
+        .eq("couple_id", profile.couple_id),
+      supabase
+        .from("meal_slots")
+        .select("date, creneau, type, texte, recipes(titre)")
+        .eq("couple_id", profile.couple_id)
+        .gte("date", weekStartKey)
+        .lte("date", weekEndKey),
+    ])
 
   const allLists = listsRes.data ?? []
   const coursesLists: ListeContext[] = allLists
@@ -127,18 +148,31 @@ export async function POST(request: Request) {
   const libraryItems: LibraryItemContext[] = libraryRes.data ?? []
   const recettes: RecetteContext[] = recipesRes.data ?? []
 
+  // Cases planning déjà remplies (conscience du routeur, §8.7). Le libellé = titre
+  // de recette liée ou texte libre ; les cases vides ne figurent pas.
+  const planningSemaine: PlanningCaseContext[] = (mealsRes.data ?? [])
+    .map((m) => {
+      const recette = Array.isArray(m.recipes) ? m.recipes[0] : m.recipes
+      const label = m.type === "texte" ? (m.texte ?? "") : (recette?.titre ?? "")
+      return {
+        date: m.date,
+        creneau: m.creneau === "diner" ? ("diner" as const) : ("dejeuner" as const),
+        label,
+      }
+    })
+    .filter((c) => c.label)
+
   const ctx: BrainContext = {
     coursesLists,
     todoLists,
     profiles,
     libraryItems,
     recettes,
+    planningSemaine,
     ecran,
   }
 
-  // 5. Date du jour résolue côté serveur (fuseau Europe/Paris) : les dates
-  //    relatives (« demain », « mardi »…) sont calées dessus (§5.4.6).
-  const jour = jourCourantDansFuseau()
+  // 5. Prompt système (contexte relu + date du jour Europe/Paris).
   const systemPrompt = construireBrainSystemPrompt({ jour, ctx, hint })
 
   // 6. Appel Claude Haiku 4.5 (§3, modèle éco). Sortie JSON stricte imposée par
@@ -185,7 +219,13 @@ export async function POST(request: Request) {
         color: p.color,
       })),
     }
-    return Response.json({ ...result, taskContext })
+    // `planningContext` : ce qu'il faut au client pour monter l'écran de génération
+    // NIVEAU 2 EXISTANT (prompt 10) sur `planning.generer_liste`, sans second
+    // aller-retour — listes de courses + semaine courante, déjà relues serveur. La
+    // liste cible est déjà pré-résolue dans l'action ; ceci ne fait que fournir le
+    // décor (aucune écriture avant validation, §6).
+    const planningContext = { coursesLists, weekStartKey }
+    return Response.json({ ...result, taskContext, planningContext })
   } catch (e) {
     if (e instanceof BrainParseError) {
       return erreur("Reformule ta phrase.", 422)

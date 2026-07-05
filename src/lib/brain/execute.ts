@@ -4,8 +4,10 @@ import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
 
 import { createClient } from "@/lib/supabase/server"
+import { type Json } from "@/types/database"
 import { guessCategory } from "@/lib/utils/guess-category"
 import { normaliserNom } from "@/lib/utils/normalize-name-key"
+import { parseDateKey } from "@/lib/planning/week"
 import { type Unite } from "@/lib/recipes/extraction"
 import {
   fusionnerQuantite,
@@ -44,6 +46,17 @@ export type RecapLigne = {
 }
 
 /**
+ * Un groupe d'actions affichable sur le ticket du journal (§7 « actions
+ * détaillées »). Purement descriptif : sérialisé dans `brain_commands.actions`
+ * pour réimprimer la ligne du ticket sans re-relire le contexte.
+ */
+export type JournalActionGroup = {
+  /** En-tête lisible, ex. « Ajouté à « Auchan » », « Coché », « Bibliothèque ». */
+  label: string
+  lignes: RecapLigne[]
+}
+
+/**
  * Une opération d'annulation. Elle décrit COMMENT défaire, sans jamais dépendre
  * d'un état client. Sérialisable (jsonb) → réutilisable tel quel par le journal.
  */
@@ -60,12 +73,25 @@ export type UndoOp =
   | { kind: "delete_library_item"; itemId: string }
   | { kind: "uncheck_task"; listId: string; taskId: string }
   | { kind: "recheck_task"; listId: string; taskId: string }
+  // Repas placé au planning → annulation = case vidée (§8.7). On retire la case
+  // qu'on a posée (par son id), jamais de restauration du repas précédent.
+  | { kind: "delete_meal_slot"; slotId: string }
 
 /** Bloc d'annulation renvoyé au client (opaque pour lui, réappliqué par le serveur). */
 export type BrainUndo = { ops: UndoOp[] }
 
 export type ExecuteResult =
-  | { ok: true; recap: RecapLigne[]; undo: BrainUndo }
+  | {
+      ok: true
+      recap: RecapLigne[]
+      undo: BrainUndo
+      /**
+       * Id de la ligne de journal créée (§7). `null` si l'écriture du journal a
+       * échoué : les actions restent exécutées et annulables via {@link undo}
+       * (fallback direct), mais la ligne de ticket n'existe pas.
+       */
+      journalId: string | null
+    }
   | { ok: false; error: string }
 
 export type UndoResult = { ok: true } | { ok: false; error: string }
@@ -77,7 +103,23 @@ const INTENTS_NIVEAU_1 = new Set([
   "courses.decocher_article",
   "bibliotheque.ajouter_article",
   "taches.cocher",
+  "planning.placer_repas",
 ])
+
+/** Les deux créneaux d'une case du planning (§8.1). */
+const CRENEAUX = new Set(["dejeuner", "diner"])
+
+/** Moment du jour d'un créneau, pour le libellé humain du récap (« jeudi soir »). */
+const CRENEAU_MOMENT: Record<string, string> = { dejeuner: "midi", diner: "soir" }
+
+/** Libellé humain « jeudi soir » d'une case, pour le récap du tampon / ticket. */
+function libelleCase(dateKey: string, creneau: string): string {
+  const d = parseDateKey(dateKey)
+  const jour = d
+    ? new Intl.DateTimeFormat("fr-FR", { weekday: "long" }).format(d)
+    : dateKey
+  return `${jour} ${CRENEAU_MOMENT[creneau] ?? creneau}`
+}
 
 /* ------------------------------------------------------------------ garde-fous */
 
@@ -121,14 +163,14 @@ async function assertCoursesList(
   supabase: ServerClient,
   listId: string,
   coupleId: string,
-): Promise<string | null> {
+): Promise<{ id: string; name: string } | null> {
   const { data } = await supabase
     .from("lists")
-    .select("id, kind")
+    .select("id, name, kind")
     .eq("id", listId)
     .eq("couple_id", coupleId)
     .maybeSingle()
-  return data?.kind === "courses" ? data.id : null
+  return data?.kind === "courses" ? { id: data.id, name: data.name } : null
 }
 
 /**
@@ -267,10 +309,16 @@ async function trouverOuCreerArticle(
  * routé ailleurs (prompt 6). Toute action hors du jeu niveau 1 est ignorée
  * défensivement.
  *
- * Renvoie un récap transparent (§6) + les données d'annulation.
+ * Renvoie un récap transparent (§6) + les données d'annulation, et JOURNALISE la
+ * commande (§7) : une ligne `brain_commands` est écrite avec la phrase dictée,
+ * le détail affichable des actions et le bloc d'annulation. L'id de cette ligne
+ * ({@link ExecuteResult.journalId}) permet au toast ANNULER de passer par le même
+ * chemin que le ticket (statut `fait` → `annule`, cf. `undoBrainCommand`).
  */
 export async function executeBrainActions(
   actions: BrainAction[],
+  /** Phrase dictée d'origine, journalisée telle quelle (§7). */
+  texteDicte: string,
 ): Promise<ExecuteResult> {
   if (!Array.isArray(actions) || actions.length === 0) {
     return { ok: false, error: "Aucune action à exécuter." }
@@ -284,17 +332,22 @@ export async function executeBrainActions(
   const { supabase, userId, coupleId } = await requireMembership()
 
   const recap: RecapLigne[] = []
+  // Groupes affichables sur le ticket (§7) : un par action exécutée.
+  const groups: JournalActionGroup[] = []
   const ops: UndoOp[] = []
   const listesTouchees = new Set<string>()
   const todosTouchees = new Set<string>()
   let biblioTouchee = false
+  let planningTouche = false
 
   for (const action of executables) {
     switch (action.intent) {
       case "courses.ajouter_article": {
-        const listId = await assertCoursesList(supabase, action.liste_id, coupleId)
-        if (!listId) return { ok: false, error: "Liste introuvable." }
+        const list = await assertCoursesList(supabase, action.liste_id, coupleId)
+        if (!list) return { ok: false, error: "Liste introuvable." }
+        const listId = list.id
         listesTouchees.add(listId)
+        const lignes: RecapLigne[] = []
 
         for (const art of action.articles) {
           const nom = art.nom.trim()
@@ -369,22 +422,26 @@ export async function executeBrainActions(
           // « au goût » est un terme de recette : pour une liste de courses, un
           // article sans quantité se dit simplement « ajouté ». Les fusions de
           // quantités gardent leur détail transparent (§6).
-          recap.push({
+          const ligne: RecapLigne = {
             nom,
             detail:
               operation.kind === "au_gout"
                 ? "ajouté"
                 : decrireFusion(operation, quantites),
-          })
+          }
+          recap.push(ligne)
+          lignes.push(ligne)
         }
+        groups.push({ label: `Ajouté à « ${list.name} »`, lignes })
         break
       }
 
       case "courses.cocher_article":
       case "courses.decocher_article": {
         const cocher = action.intent === "courses.cocher_article"
-        const listId = await assertCoursesList(supabase, action.liste_id, coupleId)
-        if (!listId) return { ok: false, error: "Liste introuvable." }
+        const list = await assertCoursesList(supabase, action.liste_id, coupleId)
+        if (!list) return { ok: false, error: "Liste introuvable." }
+        const listId = list.id
         listesTouchees.add(listId)
 
         const cle = normaliserNom(action.article.nom)
@@ -445,9 +502,14 @@ export async function executeBrainActions(
           listId,
           itemId: cible.id,
         })
-        recap.push({
+        const ligne: RecapLigne = {
           nom: action.article.nom,
           detail: cocher ? "coché" : "décoché",
+        }
+        recap.push(ligne)
+        groups.push({
+          label: `${cocher ? "Coché" : "Décoché"} dans « ${list.name} »`,
+          lignes: [ligne],
         })
         break
       }
@@ -489,12 +551,15 @@ export async function executeBrainActions(
           listId: cible.listId,
           taskId: cible.taskId,
         })
-        recap.push({ nom: action.titre, detail: "coché" })
+        const ligne: RecapLigne = { nom: action.titre, detail: "coché" }
+        recap.push(ligne)
+        groups.push({ label: "Tâche cochée", lignes: [ligne] })
         break
       }
 
       case "bibliotheque.ajouter_article": {
         biblioTouchee = true
+        const lignes: RecapLigne[] = []
         for (const art of action.articles) {
           const nom = art.nom.trim()
           const cle = normaliserNom(nom)
@@ -515,11 +580,81 @@ export async function executeBrainActions(
           if (lib.created) {
             ops.push({ kind: "delete_library_item", itemId: lib.id })
           }
-          recap.push({
+          const ligne: RecapLigne = {
             nom,
             detail: lib.created ? "ajouté" : "déjà dans la bibliothèque",
-          })
+          }
+          recap.push(ligne)
+          lignes.push(ligne)
         }
+        groups.push({ label: "Ajouté à la bibliothèque", lignes })
+        break
+      }
+
+      case "planning.placer_repas": {
+        // Bornes défensives : jour valide + créneau au jeu fermé (double la route).
+        if (!parseDateKey(action.date) || !CRENEAUX.has(action.creneau)) {
+          return { ok: false, error: "Case de planning invalide." }
+        }
+
+        // Contenu selon la source, en respectant le CHECK type ↔ contenu de la table.
+        let type: "recette" | "texte"
+        let recipeId: string | null = null
+        let texte: string | null = null
+        let label: string
+
+        if (action.repas.kind === "recette") {
+          // L'id de recette ne vient jamais d'un endroit de confiance : on revérifie
+          // qu'il appartient bien au couple (garde-fou §2.12), même déjà validé au routeur.
+          const { data: recipe } = await supabase
+            .from("recipes")
+            .select("id, titre")
+            .eq("id", action.repas.recipe_id)
+            .eq("couple_id", coupleId)
+            .maybeSingle()
+          if (!recipe) return { ok: false, error: "Recette introuvable." }
+          type = "recette"
+          recipeId = recipe.id
+          label = recipe.titre
+        } else {
+          const clean = action.repas.texte.trim().slice(0, 80)
+          if (!clean) return { ok: false, error: "Repas vide." }
+          type = "texte"
+          texte = clean
+          label = clean
+        }
+
+        // Upsert (unicité couple/date/créneau) : placer là où il y a déjà quelque
+        // chose REMPLACE (§8.1). On récupère l'id posé pour l'annulation (case vidée).
+        const { data: slot, error } = await supabase
+          .from("meal_slots")
+          .upsert(
+            {
+              couple_id: coupleId,
+              date: action.date,
+              creneau: action.creneau,
+              type,
+              recipe_id: recipeId,
+              texte,
+              created_by: userId,
+            },
+            { onConflict: "couple_id,date,creneau" },
+          )
+          .select("id")
+          .single()
+        if (error || !slot) {
+          return { ok: false, error: "Impossible de placer ce repas. Réessaie." }
+        }
+
+        planningTouche = true
+        // Annulation = case vidée (§8.7) : on retire la case posée par son id.
+        ops.push({ kind: "delete_meal_slot", slotId: slot.id })
+        const ligne: RecapLigne = {
+          nom: label,
+          detail: libelleCase(action.date, action.creneau),
+        }
+        recap.push(ligne)
+        groups.push({ label: "Repas placé", lignes: [ligne] })
         break
       }
 
@@ -536,30 +671,64 @@ export async function executeBrainActions(
   for (const listId of listesTouchees) revalidatePath(`/lists/${listId}`)
   for (const listId of todosTouchees) revalidatePath(`/lists/${listId}`)
   if (biblioTouchee) revalidatePath("/library")
+  if (planningTouche) revalidatePath("/planning")
 
-  return { ok: true, recap, undo: { ops } }
+  // Journalisation (§7) : une ligne de ticket par commande exécutée. `undo_data`
+  // porte les gestes d'annulation ; `null` si rien n'est réversible (aucune op)
+  // → le ticket n'affichera pas ANNULER (§12 Phase 3). Un échec d'écriture du
+  // journal ne fait PAS échouer la commande (déjà exécutée) : on renvoie
+  // `journalId: null` et le client retombera sur l'annulation directe.
+  const undo: BrainUndo = { ops }
+  let journalId: string | null = null
+  const { data: journalRow } = await supabase
+    .from("brain_commands")
+    .insert({
+      couple_id: coupleId,
+      user_id: userId,
+      texte_dicte: texteDicte.trim().slice(0, 1000),
+      actions: groups as unknown as Json,
+      statut: "fait",
+      undo_data: ops.length > 0 ? ({ ops } as unknown as Json) : null,
+    })
+    .select("id")
+    .single()
+  if (journalRow) journalId = journalRow.id
+
+  revalidatePath("/profile/journal")
+
+  return { ok: true, recap, undo, journalId }
 }
 
 /* ------------------------------------------------------------- annulation */
 
-/**
- * Défait un lot d'actions via ses {@link UndoOp}. Chaque geste est l'inverse exact
- * de l'exécution. Garde-fou DELETE (mémoire projet) : jamais de suppression sans
- * filtre `couple_id`/`id`, et on ne supprime un library_item que s'il n'est plus
- * référencé (aucun list_item ne pointe dessus).
- */
-export async function undoBrainActions(undo: BrainUndo): Promise<UndoResult> {
-  if (!undo || !Array.isArray(undo.ops) || undo.ops.length === 0) {
-    return { ok: false, error: "Rien à annuler." }
-  }
-  const { supabase, coupleId } = await requireMembership()
+/** Cibles à revalider après un rejeu d'annulation. */
+type UndoTargets = {
+  listes: Set<string>
+  todos: Set<string>
+  biblio: boolean
+  planning: boolean
+}
 
+/**
+ * Rejoue un lot d'{@link UndoOp} sous RLS : chaque geste est l'inverse exact de
+ * l'exécution. Garde-fou DELETE (mémoire projet) : jamais de suppression sans
+ * filtre `couple_id`/`id`, et on ne supprime un library_item que s'il n'est plus
+ * référencé (aucun list_item ne pointe dessus). Helper PRIVÉ (non exporté : ce
+ * fichier est "use server", seules des Server Actions async y sont exportables) :
+ * l'annulation journalisée passe par la Server Action {@link undoBrainActions}.
+ */
+async function replayUndoOps(
+  supabase: ServerClient,
+  coupleId: string,
+  ops: UndoOp[],
+): Promise<UndoTargets> {
   const listesTouchees = new Set<string>()
   const todosTouchees = new Set<string>()
   let biblioTouchee = false
+  let planningTouche = false
 
   // On défait dans l'ordre inverse (symétrie stricte avec l'exécution).
-  for (const op of [...undo.ops].reverse()) {
+  for (const op of [...ops].reverse()) {
     switch (op.kind) {
       case "delete_list_item": {
         // Ne retirer que si la liste appartient au couple (double la RLS).
@@ -632,12 +801,47 @@ export async function undoBrainActions(undo: BrainUndo): Promise<UndoResult> {
         }
         break
       }
+      case "delete_meal_slot": {
+        // Case vidée (§8.7). DELETE filtré par id ET couple_id (garde-fou global :
+        // jamais de suppression sans filtre couple/id sur une table multi-couples).
+        await supabase
+          .from("meal_slots")
+          .delete()
+          .eq("id", op.slotId)
+          .eq("couple_id", coupleId)
+        planningTouche = true
+        break
+      }
     }
   }
 
-  for (const listId of listesTouchees) revalidatePath(`/lists/${listId}`)
-  for (const listId of todosTouchees) revalidatePath(`/lists/${listId}`)
-  if (biblioTouchee) revalidatePath("/library")
+  return {
+    listes: listesTouchees,
+    todos: todosTouchees,
+    biblio: biblioTouchee,
+    planning: planningTouche,
+  }
+}
 
+/** Revalide les écrans impactés par un rejeu d'annulation (helper privé). */
+function revalidateUndoTargets(targets: UndoTargets) {
+  for (const listId of targets.listes) revalidatePath(`/lists/${listId}`)
+  for (const listId of targets.todos) revalidatePath(`/lists/${listId}`)
+  if (targets.biblio) revalidatePath("/library")
+  if (targets.planning) revalidatePath("/planning")
+}
+
+/**
+ * Annulation DIRECTE d'un lot (fallback quand la ligne de journal n'a pas pu
+ * être écrite : {@link ExecuteResult.journalId} `null`). Le chemin nominal passe
+ * par `undoBrainCommand` (journal), qui raye en plus la ligne du ticket.
+ */
+export async function undoBrainActions(undo: BrainUndo): Promise<UndoResult> {
+  if (!undo || !Array.isArray(undo.ops) || undo.ops.length === 0) {
+    return { ok: false, error: "Rien à annuler." }
+  }
+  const { supabase, coupleId } = await requireMembership()
+  const targets = await replayUndoOps(supabase, coupleId, undo.ops)
+  revalidateUndoTargets(targets)
   return { ok: true }
 }

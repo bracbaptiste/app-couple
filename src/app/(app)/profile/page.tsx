@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { ChevronRight, History, ShoppingBag } from "lucide-react"
+import { Brain, ChevronRight, History, ShoppingBag } from "lucide-react"
 import { redirect } from "next/navigation"
 
 import { RisoCard } from "@/components/ui/riso-card"
@@ -136,6 +136,24 @@ export default async function ProfilePage() {
             </span>
             <span className="flex-1 font-display text-[15px] uppercase text-ink">
               Historique des achats
+            </span>
+            <ChevronRight
+              className="size-5 shrink-0 text-ink-soft"
+              strokeWidth={2.5}
+              aria-hidden
+            />
+          </Link>
+
+          {/* Journal du Cerveau — À CÔTÉ des historiques (§7), commandes vocales. */}
+          <Link
+            href="/profile/journal"
+            className="flex items-center gap-3 rounded-[12px] border-2 border-ink bg-paper-light p-4 shadow-riso-ink-sm outline-none transition-transform focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px"
+          >
+            <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-[9px] border-2 border-ink bg-sauge text-ink">
+              <Brain className="size-5" strokeWidth={2.5} aria-hidden />
+            </span>
+            <span className="flex-1 font-display text-[15px] uppercase text-ink">
+              Journal du Cerveau
             </span>
             <ChevronRight
               className="size-5 shrink-0 text-ink-soft"

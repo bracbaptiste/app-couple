@@ -298,3 +298,83 @@
     background-color: var(--color-paper-light);
   }
 }
+
+/*
+  Journal du Cerveau — « ticket de caisse » (§7).
+
+  Bord perforé : le fond papier du rouleau est masqué par deux séries d'encoches
+  semi-circulaires (haut + bas), composées par intersection → le milieu reste
+  plein. Ombre riso portée par un drop-shadow (suit la silhouette dentelée, ce
+  qu'une bordure ne saurait faire une fois masquée).
+*/
+.brain-ticket {
+  --perf-r: 6px;
+  --perf-gap: 18px;
+  background-color: var(--color-paper-light);
+  filter: drop-shadow(3px 3px 0 var(--color-ink));
+  -webkit-mask:
+    radial-gradient(var(--perf-r) at 50% 0, #0000 98%, #000) 0 0 /
+      var(--perf-gap) 100% repeat-x,
+    radial-gradient(var(--perf-r) at 50% 100%, #0000 98%, #000) 0 0 /
+      var(--perf-gap) 100% repeat-x;
+  -webkit-mask-composite: source-in;
+  mask:
+    radial-gradient(var(--perf-r) at 50% 0, #0000 98%, #000) 0 0 /
+      var(--perf-gap) 100% repeat-x,
+    radial-gradient(var(--perf-r) at 50% 100%, #0000 98%, #000) 0 0 /
+      var(--perf-gap) 100% repeat-x;
+  mask-composite: intersect;
+}
+
+/*
+  Chaque commande « s'imprime » : légère translation verticale (§4.4/§7).
+  Décoratif — sous mouvement réduit, la ligne apparaît simplement.
+*/
+@media (prefers-reduced-motion: no-preference) {
+  .ticket-print-in {
+    animation: ticket-print-in 420ms ease-out both;
+  }
+}
+@keyframes ticket-print-in {
+  0% {
+    transform: translateY(-5px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/*
+  Annulation : trait d'encre qui raye la commande (§7). Le statut est aussi porté
+  par le tampon « ANNULÉ » + les couleurs → l'info reste lisible sans l'animation.
+  Le trait se dessine (scaleX 0 → 1) sous mouvement normal, et reste tracé (donc
+  visible) sous mouvement réduit.
+*/
+.brain-ticket-struck {
+  position: relative;
+}
+.brain-ticket-struck::after {
+  content: "";
+  position: absolute;
+  left: -2px;
+  right: -2px;
+  top: 50%;
+  height: 2px;
+  background-color: var(--color-ink);
+  transform-origin: left center;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .brain-ticket-struck::after {
+    animation: ticket-strike 260ms ease-out both;
+  }
+}
+@keyframes ticket-strike {
+  0% {
+    transform: scaleX(0);
+  }
+  100% {
+    transform: scaleX(1);
+  }
+}
