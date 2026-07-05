@@ -4,7 +4,22 @@ import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
 
 import { createClient } from "@/lib/supabase/server"
-import { parseDateKey } from "@/lib/planning/week"
+import { addDays, parseDateKey, startOfWeek, toDateKey } from "@/lib/planning/week"
+import { normaliserNom } from "@/lib/utils/normalize-name-key"
+import { guessCategory } from "@/lib/utils/guess-category"
+import { UNITES, type Unite } from "@/lib/recipes/extraction"
+import {
+  parseQuantites,
+  type QuantiteBase,
+} from "@/lib/recipes/fusion"
+import { decrireFusion } from "@/lib/recipes/format"
+import {
+  categoriserRetrait,
+  foldBesoin,
+  grouperBesoins,
+  type EntreeBesoin,
+  type LigneGeneree,
+} from "@/lib/planning/generation"
 
 /** Client Supabase serveur typé (inféré du helper, comme task-actions.ts). */
 type ServerClient = Awaited<ReturnType<typeof createClient>>
@@ -79,8 +94,11 @@ export type MealSource =
  * on double la vérification côté action). Le CHECK `meal_slots_content_coherent`
  * garantit en base qu'exactement une des deux formes (recette / texte) est posée.
  *
- * NB : le retrait des articles de courses engendrés par un repas remplacé (§8.6)
- * n'existe pas encore — la génération de la liste de la semaine arrive en Phase 5.
+ * NB : le retrait des articles engendrés par le repas REMPLACÉ (§8.6) ne se fait
+ * jamais ici. Il passe par {@link previewMealRemoval} + {@link confirmMealRemoval}
+ * (confirmation explicite niveau 3), qui posent le nouveau repas APRÈS le retrait
+ * éventuel. `placeMeal` reste le placement « nu » (case vide, ou remplacement déjà
+ * confirmé).
  */
 export async function placeMeal(
   dateKey: string,
@@ -214,5 +232,836 @@ export async function togglePlanningTask(
 
   revalidatePath("/planning")
   revalidatePath(`/lists/${listId}`)
+  return { ok: true }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Génération de la liste de courses de la semaine (§8.5)                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Helpers de bibliothèque — JUMEAUX de ceux de `recipes/actions.ts` (find-or-
+ * create par clé §5). Répliqués ici volontairement pour NE PAS refondre la
+ * Phase 2 en même temps (« pas de grosse refonte d'un coup », PRD §0.3). La vraie
+ * logique métier (ajustement §8.2, fusion §6) est, elle, IMPORTÉE — pas copiée
+ * (`@/lib/planning/generation` + `@/lib/recipes/fusion`). Candidat à une
+ * extraction partagée ultérieure.
+ */
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (m) => `\\${m}`)
+}
+
+async function resolveCategoryId(
+  supabase: ServerClient,
+  coupleId: string,
+  categoryName: string,
+): Promise<string | null> {
+  const { data } = await supabase
+    .from("categories")
+    .select("id")
+    .eq("couple_id", coupleId)
+    .ilike("name", escapeLike(categoryName))
+    .maybeSingle()
+  return data?.id ?? null
+}
+
+/** Crée un article de bibliothèque (clé §5 fournie par l'app). Renvoie son id. */
+async function creerArticle(
+  supabase: ServerClient,
+  coupleId: string,
+  nomAffiche: string,
+  cle: string,
+): Promise<string | null> {
+  const categoryId = await resolveCategoryId(
+    supabase,
+    coupleId,
+    guessCategory(nomAffiche),
+  )
+  const { data } = await supabase
+    .from("library_items")
+    .insert({
+      couple_id: coupleId,
+      name: nomAffiche,
+      nom_normalise: cle, // règle d'or §5 : clé canonique JS, jamais celle de l'IA
+      category_id: categoryId,
+    })
+    .select("id")
+    .single()
+  return data?.id ?? null
+}
+
+/** Renforce la fréquence d'usage d'un article (tri de la Bibliothèque). */
+async function bumpUsage(
+  supabase: ServerClient,
+  id: string,
+  usageCount: number,
+): Promise<void> {
+  await supabase
+    .from("library_items")
+    .update({ usage_count: usageCount + 1, last_used_at: new Date().toISOString() })
+    .eq("id", id)
+}
+
+/** Libellé « jour + créneau » d'une case (« lun. midi », « mar. soir »). */
+const CRENEAU_JOUR: Record<Creneau, string> = { dejeuner: "midi", diner: "soir" }
+const weekdayFmt = new Intl.DateTimeFormat("fr-FR", { weekday: "short" })
+function labelJour(dateKey: string, creneau: Creneau): string {
+  const d = parseDateKey(dateKey)
+  const wd = d ? weekdayFmt.format(d).replace(".", "") : dateKey
+  return `${wd} ${CRENEAU_JOUR[creneau]}`
+}
+
+/** Coerce un entier strictement positif (repli si invalide), cf. recipes/actions. */
+function entierPositif(v: unknown, repli: number): number {
+  const n = typeof v === "string" ? Number(v) : v
+  return typeof n === "number" && Number.isFinite(n) && n > 0 ? Math.round(n) : repli
+}
+
+/* --- Types renvoyés au client (sérialisables) ----------------------------- */
+
+/** Une ligne du récapitulatif de génération (créée ou fusionnée). */
+export type GenerationLigneView = {
+  nom: string
+  quantitesInitiales: QuantiteBase[]
+  quantitesFinales: QuantiteBase[]
+  /** Décompte transparent : ce que chaque repas apporte (§6). */
+  detail: { jour: string; repas: string; texte: string }[]
+}
+
+/** Un repas non traité par la génération (§8.5.4), avec sa raison. */
+export type RepasIgnoreView = {
+  jour: string
+  libelle: string
+  raison: "texte" | "sans_ingredient" | "deja_genere"
+}
+
+/** Récapitulatif complet AVANT écriture (validation niveau 2, §6/§8.5.5). */
+export type GenerationApercu = {
+  listId: string
+  listName: string
+  cible: number
+  creees: GenerationLigneView[]
+  fusionnees: GenerationLigneView[]
+  ignores: RepasIgnoreView[]
+  /** Lignes à écrire (créées + fusionnées). 0 ⇒ rien à générer cette semaine. */
+  aEcrire: number
+}
+
+export type PreviewWeekListResult =
+  | { ok: true; apercu: GenerationApercu }
+  | { ok: false; error: string }
+
+export type CommitWeekListResult =
+  | { ok: true; apercu: GenerationApercu }
+  | { ok: false; error: string }
+
+/* --- Rassemblement des besoins (LECTURE SEULE, partagé preview/commit) ----- */
+
+/** Un besoin agrégé + l'état courant de sa ligne cible (lu, jamais modifié). */
+type BesoinRassemble = {
+  besoin: ReturnType<typeof grouperBesoins>[number]
+  /** Article de bibliothèque trouvé (null ⇒ à créer au commit). */
+  libraryItemId: string | null
+  usageCount: number | null
+  /** Ligne de liste ACTIVE existante à mettre à jour (null ⇒ insert au commit). */
+  listItemId: string | null
+  existantes: QuantiteBase[]
+  lignePreexistante: boolean
+}
+
+type Rassemblement = {
+  list: { id: string; name: string }
+  cible: number
+  besoins: BesoinRassemble[]
+  ignores: RepasIgnoreView[]
+}
+
+/**
+ * Lit tout ce qu'il faut pour générer la liste de la semaine, SANS RIEN ÉCRIRE :
+ * la liste cible, les repas-recette de la semaine affichée, leurs ingrédients
+ * ajustés au nombre de personnes (ratio §8.2 recalculé serveur), agrégés par clé
+ * `normaliserNom` (§5), et l'état courant de chaque ligne cible. Partagé par la
+ * prévisualisation ET l'écriture : le commit RE-LIT tout (jamais le récap du
+ * client), garantissant que ce qui est écrit correspond à l'état réel (§2.12).
+ *
+ * Garde-fou anti double-génération : un repas déjà relié à CETTE liste (table de
+ * provenance) est exclu et signalé « déjà générée » — sinon une seconde
+ * génération doublerait silencieusement les quantités (viole §6 « jamais de
+ * fusion silencieuse »).
+ */
+async function rassemblerBesoins(
+  supabase: ServerClient,
+  coupleId: string,
+  listId: string,
+  personnes: number | undefined,
+  weekStartKey: string,
+): Promise<{ ok: true; data: Rassemblement } | { ok: false; error: string }> {
+  // 1. Liste cible du couple, et bien une liste de courses ?
+  const { data: list } = await supabase
+    .from("lists")
+    .select("id, name, kind")
+    .eq("id", listId)
+    .eq("couple_id", coupleId)
+    .maybeSingle()
+  if (!list) return { ok: false, error: "Liste introuvable." }
+  if (list.kind === "todo") {
+    return { ok: false, error: "Choisis une liste de courses." }
+  }
+
+  const cible = entierPositif(personnes, 2) // défaut 2 (§8.5.2)
+
+  // 2. Bornes de la semaine affichée (normalisées au lundi, cf. la page).
+  const parsed = parseDateKey(weekStartKey)
+  if (!parsed) return { ok: false, error: "Semaine invalide." }
+  const monday = startOfWeek(parsed)
+  const mondayKey = toDateKey(monday)
+  const sundayKey = toDateKey(addDays(monday, 6))
+
+  // 3. Repas de la semaine.
+  const { data: meals, error: mealsErr } = await supabase
+    .from("meal_slots")
+    .select("id, date, creneau, type, texte, recipe_id")
+    .eq("couple_id", coupleId)
+    .gte("date", mondayKey)
+    .lte("date", sundayKey)
+  if (mealsErr) return { ok: false, error: "Impossible de lire les repas." }
+
+  const ignores: RepasIgnoreView[] = []
+  const recetteMeals: {
+    id: string
+    date: string
+    creneau: Creneau
+    recipeId: string
+  }[] = []
+
+  for (const m of meals ?? []) {
+    const creneau: Creneau = m.creneau === "diner" ? "diner" : "dejeuner"
+    if (m.type === "texte") {
+      // Repas texte libre : ne génère rien (§8.5.4).
+      ignores.push({
+        jour: labelJour(m.date, creneau),
+        libelle: m.texte ?? "Texte libre",
+        raison: "texte",
+      })
+    } else if (m.recipe_id) {
+      recetteMeals.push({ id: m.id, date: m.date, creneau, recipeId: m.recipe_id })
+    }
+  }
+
+  const recetteMealIds = recetteMeals.map((m) => m.id)
+  const recipeIds = [...new Set(recetteMeals.map((m) => m.recipeId))]
+
+  // 4. Recettes + ingrédients (bornés au couple), et provenance déjà en place.
+  const [recipesRes, ingredientsRes, listItemsRes] = await Promise.all([
+    recipeIds.length
+      ? supabase
+          .from("recipes")
+          .select("id, titre, nombre_personnes")
+          .in("id", recipeIds)
+          .eq("couple_id", coupleId)
+      : Promise.resolve({ data: [] as { id: string; titre: string; nombre_personnes: number }[] }),
+    recipeIds.length
+      ? supabase
+          .from("recipe_ingredients")
+          .select("recipe_id, nom_affiche, quantite, unite, ordre")
+          .in("recipe_id", recipeIds)
+          .order("ordre", { ascending: true })
+      : Promise.resolve({ data: [] as { recipe_id: string; nom_affiche: string; quantite: number | null; unite: string | null; ordre: number }[] }),
+    supabase.from("list_items").select("id").eq("list_id", listId),
+  ])
+
+  const recipesById = new Map(
+    (recipesRes.data ?? []).map((r) => [r.id, r]),
+  )
+  const ingredientsByRecipe = new Map<string, typeof ingredientsRes.data>()
+  for (const ing of ingredientsRes.data ?? []) {
+    const bucket = ingredientsByRecipe.get(ing.recipe_id) ?? []
+    bucket.push(ing)
+    ingredientsByRecipe.set(ing.recipe_id, bucket)
+  }
+
+  // Garde-fou double-génération : quels repas ont déjà engendré un article de
+  // CETTE liste ? (provenance × articles de la liste)
+  const listItemIds = (listItemsRes.data ?? []).map((r) => r.id)
+  let dejaGeneres = new Set<string>()
+  if (listItemIds.length && recetteMealIds.length) {
+    const { data: srcs } = await supabase
+      .from("meal_slot_sources")
+      .select("meal_slot_id")
+      .in("meal_slot_id", recetteMealIds)
+      .in("list_item_id", listItemIds)
+    dejaGeneres = new Set((srcs ?? []).map((s) => s.meal_slot_id))
+  }
+
+  // 5. Construit les entrées à plat (ratio §8.2 appliqué ici, serveur).
+  const entrees: EntreeBesoin[] = []
+  for (const meal of recetteMeals) {
+    const recipe = recipesById.get(meal.recipeId)
+    if (!recipe) continue // recette supprimée entre-temps (défensif)
+    const jour = labelJour(meal.date, meal.creneau)
+
+    if (dejaGeneres.has(meal.id)) {
+      ignores.push({ jour, libelle: recipe.titre, raison: "deja_genere" })
+      continue
+    }
+
+    const ings = ingredientsByRecipe.get(meal.recipeId) ?? []
+    if (ings.length === 0) {
+      ignores.push({ jour, libelle: recipe.titre, raison: "sans_ingredient" })
+      continue
+    }
+
+    const base = entierPositif(recipe.nombre_personnes, 4)
+    const ratio = cible / base
+
+    for (const ing of ings) {
+      const nom = (ing.nom_affiche ?? "").trim()
+      if (!nom) continue
+      const cle = normaliserNom(nom) // règle d'or §5 : jamais la clé stockée
+      if (!cle) continue
+      const unite: Unite | null = (UNITES as readonly string[]).includes(
+        ing.unite as string,
+      )
+        ? (ing.unite as Unite)
+        : null
+      // « au goût » (null) n'est jamais mis à l'échelle (§8.2).
+      const quantite = ing.quantite === null ? null : ing.quantite * ratio
+      entrees.push({
+        cle,
+        nom,
+        contribution: { mealSlotId: meal.id, repas: recipe.titre, jour, quantite, unite },
+      })
+    }
+  }
+
+  const groupes = grouperBesoins(entrees)
+
+  // 6. État courant de chaque ligne cible (find-only : aucune création ici).
+  const besoins: BesoinRassemble[] = []
+  for (const besoin of groupes) {
+    const { data: matches } = await supabase
+      .from("library_items")
+      .select("id, usage_count")
+      .eq("couple_id", coupleId)
+      .eq("nom_normalise", besoin.cle)
+      .order("usage_count", { ascending: false })
+      .limit(1)
+    const lib = matches?.[0]
+
+    if (!lib) {
+      besoins.push({
+        besoin,
+        libraryItemId: null,
+        usageCount: null,
+        listItemId: null,
+        existantes: [],
+        lignePreexistante: false,
+      })
+      continue
+    }
+
+    // Ligne ACTIVE (non cochée) : on ne fusionne jamais dans une ligne cochée.
+    const { data: lines } = await supabase
+      .from("list_items")
+      .select("id, quantities")
+      .eq("list_id", listId)
+      .eq("library_item_id", lib.id)
+      .eq("is_checked", false)
+      .limit(1)
+    const line = lines?.[0]
+
+    besoins.push({
+      besoin,
+      libraryItemId: lib.id,
+      usageCount: lib.usage_count,
+      listItemId: line?.id ?? null,
+      existantes: parseQuantites(line?.quantities),
+      lignePreexistante: Boolean(line),
+    })
+  }
+
+  return {
+    ok: true,
+    data: { list: { id: list.id, name: list.name }, cible, besoins, ignores },
+  }
+}
+
+/** Projette une ligne repliée vers sa vue client (récap transparent §6). */
+function ligneView(l: LigneGeneree): GenerationLigneView {
+  return {
+    nom: l.nom,
+    quantitesInitiales: l.quantitesInitiales,
+    quantitesFinales: l.quantitesFinales,
+    detail: l.etapes.map((e) => ({
+      jour: e.contribution.jour,
+      repas: e.contribution.repas,
+      texte: decrireFusion(e.operation, e.quantitesApres),
+    })),
+  }
+}
+
+/**
+ * NIVEAU 2 — Prévisualisation de la génération (§8.5.5). LECTURE SEULE : agrège,
+ * ajuste et fusionne EN MÉMOIRE, puis renvoie le récapitulatif complet (articles
+ * créés, fusions détaillées, repas ignorés). RIEN n'est écrit — l'écriture
+ * n'arrive qu'après validation via {@link commitWeekList}.
+ */
+export async function previewWeekList(
+  listId: string,
+  personnes: number | undefined,
+  weekStartKey: string,
+): Promise<PreviewWeekListResult> {
+  const { supabase, coupleId } = await requireMembership()
+
+  const r = await rassemblerBesoins(supabase, coupleId, listId, personnes, weekStartKey)
+  if (!r.ok) return r
+  const data = r.data
+
+  const creees: GenerationLigneView[] = []
+  const fusionnees: GenerationLigneView[] = []
+  for (const b of data.besoins) {
+    const ligne = foldBesoin(b.besoin, b.existantes, b.lignePreexistante)
+    const view = ligneView(ligne)
+    if (ligne.statut === "cree") creees.push(view)
+    else fusionnees.push(view)
+  }
+
+  return {
+    ok: true,
+    apercu: {
+      listId: data.list.id,
+      listName: data.list.name,
+      cible: data.cible,
+      creees,
+      fusionnees,
+      ignores: data.ignores,
+      aEcrire: creees.length + fusionnees.length,
+    },
+  }
+}
+
+/**
+ * NIVEAU 2 — Écriture de la génération, APRÈS validation (§8.5.5/§8.5.6). RE-LIT
+ * tout côté serveur (jamais le récap du client, §2.12) puis, pour chaque besoin :
+ *   1. article de bibliothèque (trouvé au rassemblement, créé ici si absent) ;
+ *   2. ligne de liste : update de la ligne active existante, sinon insert ;
+ *   3. provenance : un lien `(case, article)` par repas contributeur, marqué
+ *      `origine = 'generation'` (ligne créée) ou `'fusion'` (ligne préexistante) —
+ *      indispensable au retrait ciblé du prompt 11 (§8.6).
+ * Renvoie le même récapitulatif que la prévisualisation, pour l'écran de succès.
+ */
+export async function commitWeekList(
+  listId: string,
+  personnes: number | undefined,
+  weekStartKey: string,
+): Promise<CommitWeekListResult> {
+  const { supabase, userId, coupleId } = await requireMembership()
+
+  const r = await rassemblerBesoins(supabase, coupleId, listId, personnes, weekStartKey)
+  if (!r.ok) return r
+  const data = r.data
+
+  const creees: GenerationLigneView[] = []
+  const fusionnees: GenerationLigneView[] = []
+
+  for (const b of data.besoins) {
+    const ligne = foldBesoin(b.besoin, b.existantes, b.lignePreexistante)
+
+    // 1. Article de bibliothèque : créé si le rassemblement n'en a trouvé aucun.
+    let libraryItemId = b.libraryItemId
+    if (libraryItemId === null) {
+      libraryItemId = await creerArticle(supabase, coupleId, b.besoin.nom, b.besoin.cle)
+      if (!libraryItemId) {
+        return { ok: false, error: "Impossible de créer un article. Réessaie." }
+      }
+    } else {
+      await bumpUsage(supabase, libraryItemId, b.usageCount ?? 0)
+    }
+
+    // 2. Ligne de liste : update de l'active existante, sinon insert.
+    let listItemId = b.listItemId
+    if (listItemId) {
+      const { error } = await supabase
+        .from("list_items")
+        .update({ quantities: ligne.quantitesFinales })
+        .eq("id", listItemId)
+        .eq("list_id", listId)
+      if (error) {
+        return { ok: false, error: "Impossible de mettre à jour la liste. Réessaie." }
+      }
+    } else {
+      const { data: inserted, error } = await supabase
+        .from("list_items")
+        .insert({
+          list_id: listId,
+          library_item_id: libraryItemId,
+          added_by: userId,
+          quantities: ligne.quantitesFinales,
+        })
+        .select("id")
+        .single()
+      if (error || !inserted) {
+        return { ok: false, error: "Impossible d’ajouter à la liste. Réessaie." }
+      }
+      listItemId = inserted.id
+    }
+
+    // 3. Provenance (§8.5.6) : un lien par repas contributeur (dédupliqué).
+    const origine = ligne.statut === "cree" ? "generation" : "fusion"
+    const mealSlotIds = [...new Set(ligne.etapes.map((e) => e.contribution.mealSlotId))]
+    const rows = mealSlotIds.map((meal_slot_id) => ({
+      meal_slot_id,
+      list_item_id: listItemId as string,
+      origine,
+    }))
+    if (rows.length) {
+      const { error } = await supabase
+        .from("meal_slot_sources")
+        .upsert(rows, {
+          onConflict: "meal_slot_id,list_item_id",
+          ignoreDuplicates: true,
+        })
+      if (error) {
+        return { ok: false, error: "Impossible d’enregistrer la provenance. Réessaie." }
+      }
+    }
+
+    const view = ligneView(ligne)
+    if (ligne.statut === "cree") creees.push(view)
+    else fusionnees.push(view)
+  }
+
+  revalidatePath(`/lists/${listId}`)
+  revalidatePath("/planning")
+
+  return {
+    ok: true,
+    apercu: {
+      listId: data.list.id,
+      listName: data.list.name,
+      cible: data.cible,
+      creees,
+      fusionnees,
+      ignores: data.ignores,
+      aEcrire: creees.length + fusionnees.length,
+    },
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Retrait ciblé des articles d'un repas supprimé / remplacé (§8.6)           */
+/* -------------------------------------------------------------------------- */
+
+/** Un article proposé au retrait entier (ligne créée, non cochée, source unique). */
+export type RetraitLigneView = {
+  listItemId: string
+  nom: string
+  quantites: QuantiteBase[]
+}
+
+/** Un article NON retirable, seulement signalé « à ajuster manuellement » (§8.6). */
+export type AjustementLigneView = {
+  nom: string
+  quantites: QuantiteBase[]
+  /** `fusion` = existait déjà avant la génération ; `partage` = sert aussi ailleurs. */
+  raison: "fusion" | "partage"
+  /** Autres repas partageant l'article (« mar. soir · Curry »), pour `partage`. */
+  partageAvec: string[]
+}
+
+/** Un article coché engendré par ce repas : jamais touché, signalé pour transparence. */
+export type ConserveLigneView = {
+  nom: string
+  quantites: QuantiteBase[]
+}
+
+/** Récapitulatif AVANT confirmation du retrait (niveau 3, §8.6). */
+export type MealRemovalPreview = {
+  slotId: string
+  /** Libellé du repas concerné (« Lasagnes »), pour la question. */
+  repasLabel: string
+  retirables: RetraitLigneView[]
+  ajustements: AjustementLigneView[]
+  conserves: ConserveLigneView[]
+}
+
+export type PreviewMealRemovalResult =
+  | { ok: true; preview: MealRemovalPreview }
+  | { ok: false; error: string }
+
+/** Comment terminer après le retrait éventuel : vider la case, ou y poser un repas. */
+export type MealRemovalMode =
+  | { kind: "clear" }
+  | { kind: "replace"; source: MealSource }
+
+/** Un article engendré par le repas visé, avec tout ce qu'il faut pour le classer. */
+type ArticleRepas = {
+  listItemId: string
+  listId: string
+  nom: string
+  quantites: QuantiteBase[]
+  checked: boolean
+  origine: "generation" | "fusion"
+  /** Nombre de repas distincts reliés à cet article (provenance). */
+  sourceCount: number
+  /** Libellés des AUTRES repas qui l'engendrent aussi (pour le détail « partage »). */
+  autresRepas: string[]
+}
+
+/**
+ * Rassemble, pour un repas planifié, tous les articles de liste qu'il a engendrés
+ * (via `meal_slot_sources`) et l'état RÉEL de chacun (coché ? créé/fusionné ?
+ * partagé avec un autre repas ?). LECTURE SEULE, bornée au couple. Base commune de
+ * la prévisualisation ET de la confirmation : la confirmation RE-CLASSE à partir
+ * d'ici (jamais depuis la liste envoyée par le client, §2.12) — un article coché
+ * entre-temps bascule donc en `conserver` et échappe au retrait.
+ *
+ * Renvoie `null` si la case n'existe pas / n'est pas au couple.
+ */
+async function rassemblerArticlesRepas(
+  supabase: ServerClient,
+  coupleId: string,
+  slotId: string,
+): Promise<{ label: string; articles: ArticleRepas[] } | null> {
+  // 1. La case, bornée au couple (garde-fou : jamais d'accès hors couple).
+  const { data: slot } = await supabase
+    .from("meal_slots")
+    .select("id, type, texte, recipe_id")
+    .eq("id", slotId)
+    .eq("couple_id", coupleId)
+    .maybeSingle()
+  if (!slot) return null
+
+  let label = slot.texte ?? "Ce repas"
+  if (slot.type === "recette" && slot.recipe_id) {
+    const { data: r } = await supabase
+      .from("recipes")
+      .select("titre")
+      .eq("id", slot.recipe_id)
+      .eq("couple_id", coupleId)
+      .maybeSingle()
+    label = r?.titre ?? "Ce repas"
+  }
+
+  // 2. Articles engendrés par CETTE case + leur origine (créé / fusionné).
+  const { data: myLinks } = await supabase
+    .from("meal_slot_sources")
+    .select("list_item_id, origine")
+    .eq("meal_slot_id", slotId)
+  const links = myLinks ?? []
+  if (links.length === 0) return { label, articles: [] }
+
+  const origineByItem = new Map(
+    links.map((l) => [l.list_item_id, l.origine as "generation" | "fusion"]),
+  )
+  const itemIds = [...origineByItem.keys()]
+
+  // 3. État courant des articles (RLS = cloisonnement couple) + leur libellé.
+  const { data: items } = await supabase
+    .from("list_items")
+    .select("id, list_id, quantities, is_checked, library_item_id")
+    .in("id", itemIds)
+
+  const libIds = [
+    ...new Set((items ?? []).map((i) => i.library_item_id).filter(Boolean)),
+  ] as string[]
+  const { data: libs } = libIds.length
+    ? await supabase.from("library_items").select("id, name").in("id", libIds)
+    : { data: [] as { id: string; name: string }[] }
+  const nameByLib = new Map((libs ?? []).map((l) => [l.id, l.name]))
+
+  // 4. Provenance COMPLÈTE de ces articles : combien de repas les engendrent, et
+  //    lesquels (pour signaler « sert aussi à … » sur les articles partagés).
+  const { data: allSrc } = await supabase
+    .from("meal_slot_sources")
+    .select("meal_slot_id, list_item_id")
+    .in("list_item_id", itemIds)
+  const slotsByItem = new Map<string, Set<string>>()
+  for (const s of allSrc ?? []) {
+    const set = slotsByItem.get(s.list_item_id) ?? new Set<string>()
+    set.add(s.meal_slot_id)
+    slotsByItem.set(s.list_item_id, set)
+  }
+
+  // 5. Libellés « jour · repas » des AUTRES cases partageant un de ces articles.
+  const otherSlotIds = [
+    ...new Set((allSrc ?? []).map((s) => s.meal_slot_id)),
+  ].filter((id) => id !== slotId)
+  const labelBySlot = new Map<string, string>()
+  if (otherSlotIds.length) {
+    const { data: others } = await supabase
+      .from("meal_slots")
+      .select("id, date, creneau, type, texte, recipe_id")
+      .in("id", otherSlotIds)
+      .eq("couple_id", coupleId)
+    const otherRecipeIds = [
+      ...new Set((others ?? []).map((o) => o.recipe_id).filter(Boolean)),
+    ] as string[]
+    const { data: orecipes } = otherRecipeIds.length
+      ? await supabase
+          .from("recipes")
+          .select("id, titre")
+          .in("id", otherRecipeIds)
+          .eq("couple_id", coupleId)
+      : { data: [] as { id: string; titre: string }[] }
+    const titleById = new Map((orecipes ?? []).map((r) => [r.id, r.titre]))
+    for (const o of others ?? []) {
+      const creneau: Creneau = o.creneau === "diner" ? "diner" : "dejeuner"
+      const nom =
+        o.type === "recette" && o.recipe_id
+          ? titleById.get(o.recipe_id) ?? "Repas"
+          : o.texte ?? "Repas"
+      labelBySlot.set(o.id, `${labelJour(o.date, creneau)} · ${nom}`)
+    }
+  }
+
+  // 6. Assemblage.
+  const articles: ArticleRepas[] = []
+  for (const it of items ?? []) {
+    const origine = origineByItem.get(it.id)
+    if (origine !== "generation" && origine !== "fusion") continue
+    const slotSet = slotsByItem.get(it.id) ?? new Set([slotId])
+    const autresRepas = [...slotSet]
+      .filter((id) => id !== slotId)
+      .map((id) => labelBySlot.get(id))
+      .filter((v): v is string => Boolean(v))
+    articles.push({
+      listItemId: it.id,
+      listId: it.list_id,
+      nom: nameByLib.get(it.library_item_id ?? "") ?? "Article",
+      quantites: parseQuantites(it.quantities),
+      checked: Boolean(it.is_checked),
+      origine,
+      sourceCount: slotSet.size,
+      autresRepas,
+    })
+  }
+
+  return { label, articles }
+}
+
+/**
+ * NIVEAU 3 (§8.6) — Prévisualise ce que la suppression / le remplacement d'un
+ * repas planifié ferait à la liste de courses. LECTURE SEULE : classe chaque
+ * article engendré via {@link categoriserRetrait} (garde-fou pur) et renvoie les
+ * trois listes (à retirer / à ajuster / conservés). RIEN n'est écrit ; le retrait
+ * réel n'a lieu qu'après confirmation explicite via {@link confirmMealRemoval}.
+ */
+export async function previewMealRemoval(
+  slotId: string,
+): Promise<PreviewMealRemovalResult> {
+  const { supabase, coupleId } = await requireMembership()
+
+  const rassemble = await rassemblerArticlesRepas(supabase, coupleId, slotId)
+  if (!rassemble) return { ok: false, error: "Repas introuvable." }
+
+  const retirables: RetraitLigneView[] = []
+  const ajustements: AjustementLigneView[] = []
+  const conserves: ConserveLigneView[] = []
+
+  for (const a of rassemble.articles) {
+    switch (categoriserRetrait(a.origine, a.checked, a.sourceCount)) {
+      case "retirable":
+        retirables.push({ listItemId: a.listItemId, nom: a.nom, quantites: a.quantites })
+        break
+      case "ajuster":
+        ajustements.push({
+          nom: a.nom,
+          quantites: a.quantites,
+          raison: a.origine === "fusion" ? "fusion" : "partage",
+          partageAvec: a.autresRepas,
+        })
+        break
+      case "conserver":
+        conserves.push({ nom: a.nom, quantites: a.quantites })
+        break
+    }
+  }
+
+  return {
+    ok: true,
+    preview: { slotId, repasLabel: rassemble.label, retirables, ajustements, conserves },
+  }
+}
+
+/**
+ * NIVEAU 3 (§8.6) — Applique la décision de retrait APRÈS confirmation explicite.
+ * RE-CLASSE tout côté serveur (jamais la liste du client, §2.12) : seuls les
+ * articles ENCORE `retirable` (créés par la génération, non cochés, source unique)
+ * ET explicitement demandés (`listItemIds`) sont supprimés. Un article coché ou
+ * fusionné entre-temps est ignoré en silence — garde-fou absolu : on ne touche
+ * jamais un article coché, jamais de retrait non demandé.
+ *
+ * Ensuite, selon `mode` :
+ *   - `clear`   — vide la case (cascade : la provenance restante disparaît) ;
+ *   - `replace` — purge la provenance résiduelle de la case (l'upsert garde le même
+ *     id : les liens de l'ancien repas n'ont plus de sens), puis pose le nouveau
+ *     repas via {@link placeMeal}. Les courses manquantes du nouveau repas
+ *     s'ajouteront à la prochaine « génération de la semaine » (le garde-fou
+ *     anti-double-génération ne saute que les repas DÉJÀ générés, §8.5).
+ */
+export async function confirmMealRemoval(
+  slotId: string,
+  listItemIds: string[],
+  mode: MealRemovalMode,
+): Promise<ActionResult> {
+  const { supabase, coupleId } = await requireMembership()
+
+  const rassemble = await rassemblerArticlesRepas(supabase, coupleId, slotId)
+  if (!rassemble) return { ok: false, error: "Repas introuvable." }
+
+  // Ensemble RÉELLEMENT retirable, recalculé serveur (jamais confiance au client).
+  const retirablesById = new Map(
+    rassemble.articles
+      .filter(
+        (a) => categoriserRetrait(a.origine, a.checked, a.sourceCount) === "retirable",
+      )
+      .map((a) => [a.listItemId, a]),
+  )
+  const demandes = new Set(listItemIds)
+  const aRetirer = [...retirablesById.values()].filter((a) => demandes.has(a.listItemId))
+
+  // 1. Retrait ciblé (DELETE par id ; RLS + provenance couple-scoped en amont).
+  const listesTouchees = new Set<string>()
+  if (aRetirer.length) {
+    for (const a of aRetirer) listesTouchees.add(a.listId)
+    const { error } = await supabase
+      .from("list_items")
+      .delete()
+      .in(
+        "id",
+        aRetirer.map((a) => a.listItemId),
+      )
+    if (error) {
+      return { ok: false, error: "Impossible de retirer les articles. Réessaie." }
+    }
+  }
+
+  // 2. Vider ou remplacer la case.
+  if (mode.kind === "clear") {
+    const res = await clearMeal(slotId)
+    if (!res.ok) return res
+  } else {
+    // La provenance de l'ancien repas ne vaut plus rien (même case, autre contenu).
+    const { error: srcErr } = await supabase
+      .from("meal_slot_sources")
+      .delete()
+      .eq("meal_slot_id", slotId)
+    if (srcErr) {
+      return { ok: false, error: "Impossible de nettoyer la provenance. Réessaie." }
+    }
+    const { data: slot } = await supabase
+      .from("meal_slots")
+      .select("date, creneau")
+      .eq("id", slotId)
+      .eq("couple_id", coupleId)
+      .maybeSingle()
+    if (!slot) return { ok: false, error: "Repas introuvable." }
+    const res = await placeMeal(slot.date, slot.creneau, mode.source)
+    if (!res.ok) return res
+  }
+
+  revalidatePath("/planning")
+  for (const listId of listesTouchees) revalidatePath(`/lists/${listId}`)
   return { ok: true }
 }

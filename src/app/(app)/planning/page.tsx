@@ -56,18 +56,20 @@ export default async function PlanningPage({
   // En parallèle : les repas de la semaine (couple + plage de dates, jointure
   // recette pour le titre), les to-do lists du couple (pour cibler leurs tâches),
   // et le carnet de recettes (id + titre) pour le picker de placement.
-  const [mealsRes, todoListsRes, recipesRes] = await Promise.all([
+  const [mealsRes, listsRes, recipesRes] = await Promise.all([
     supabase
       .from("meal_slots")
       .select("id, date, creneau, type, texte, recipe_id, recipes(titre)")
       .eq("couple_id", profile.couple_id)
       .gte("date", mondayKey)
       .lte("date", sundayKey),
+    // Toutes les listes du couple : les to-do ciblent les tâches du planning
+    // (§8.3), les listes de courses sont les cibles de la génération (§8.5).
     supabase
       .from("lists")
-      .select("id")
+      .select("id, name, kind")
       .eq("couple_id", profile.couple_id)
-      .eq("kind", "todo"),
+      .order("position", { ascending: true }),
     supabase
       .from("recipes")
       .select("id, titre")
@@ -75,7 +77,7 @@ export default async function PlanningPage({
       .order("titre", { ascending: true }),
   ])
 
-  if (mealsRes.error || todoListsRes.error) {
+  if (mealsRes.error || listsRes.error) {
     throw new Error("Impossible de charger le planning")
   }
 
@@ -83,7 +85,12 @@ export default async function PlanningPage({
   // on la borne aux to-do lists DU COUPLE (ids ci-dessus), puis on filtre la plage
   // d'échéance. Les récurrentes remontent via la ligne de leur prochaine
   // occurrence (matérialisée en base au cochage) — rien de spécial à projeter.
-  const todoListIds = (todoListsRes.data ?? []).map((l) => l.id)
+  const allLists = listsRes.data ?? []
+  const todoListIds = allLists.filter((l) => l.kind === "todo").map((l) => l.id)
+  // Cibles de la génération de la semaine (§8.5) : les listes de courses.
+  const coursesLists = allLists
+    .filter((l) => l.kind !== "todo")
+    .map((l) => ({ id: l.id, name: l.name }))
   let taskRows: {
     id: string
     title: string
@@ -163,6 +170,7 @@ export default async function PlanningPage({
         coupleId={profile.couple_id}
         columns={columns}
         recipes={recipes}
+        coursesLists={coursesLists}
         weekStartKey={mondayKey}
         prevWeekKey={toDateKey(addWeeks(monday, -1))}
         nextWeekKey={toDateKey(addWeeks(monday, 1))}

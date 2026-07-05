@@ -3,10 +3,12 @@
 import Link from "next/link"
 import { Dialog } from "@base-ui/react/dialog"
 import {
+  AlertTriangle,
   CalendarDays,
   ChevronLeft,
   ChevronRight,
   ChefHat,
+  Info,
   Pencil,
   Plus,
   Search,
@@ -21,9 +23,19 @@ import { RisoCheckbox } from "@/components/ui/riso-checkbox"
 import { useSwipeDismiss } from "@/lib/hooks/useSwipeDismiss"
 import { useRealtimePlanning } from "@/lib/realtime"
 import { formatWeekLabel, parseDateKey } from "@/lib/planning/week"
+import { formatQuantites } from "@/lib/recipes/format"
 import { cn } from "@/lib/utils"
 
-import { placeMeal, clearMeal, togglePlanningTask } from "./actions"
+import {
+  placeMeal,
+  clearMeal,
+  confirmMealRemoval,
+  previewMealRemoval,
+  togglePlanningTask,
+  type MealRemovalMode,
+  type MealRemovalPreview,
+} from "./actions"
+import { GenerateWeekList, type CoursesListView } from "./generate-week-list"
 
 /** Un repas placé dans une case (déjeuner ou dîner d'un jour). */
 export type MealSlotView = {
@@ -96,6 +108,7 @@ export function PlanningGrid({
   coupleId,
   columns,
   recipes,
+  coursesLists,
   weekStartKey,
   prevWeekKey,
   nextWeekKey,
@@ -104,6 +117,8 @@ export function PlanningGrid({
   coupleId: string
   columns: DayColumn[]
   recipes: RecipePickView[]
+  /** Listes de courses cibles de la génération de la semaine (§8.5). */
+  coursesLists: CoursesListView[]
   weekStartKey: string
   prevWeekKey: string
   nextWeekKey: string
@@ -168,6 +183,9 @@ export function PlanningGrid({
           dir="next"
         />
       </nav>
+
+      {/* Génération de la liste de courses de la semaine affichée (§8.5). */}
+      <GenerateWeekList coursesLists={coursesLists} weekStartKey={weekStartKey} />
 
       <ol className="flex flex-col gap-2.5">
         {columns.map((col) => (
@@ -442,7 +460,7 @@ function normalize(value: string): string {
     .replace(/[̀-ͯ]/g, "")
 }
 
-type SheetStep = "menu" | "recette" | "texte"
+type SheetStep = "menu" | "recette" | "texte" | "confirm"
 
 /**
  * Bottom sheet de placement d'un repas (§8.2) — deux sources : une recette du
@@ -477,7 +495,7 @@ function MealPlacementSheet({
         <Dialog.Backdrop className="fixed inset-0 z-40 bg-ink/55 transition-opacity data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 motion-reduce:transition-none" />
         <Dialog.Popup
           className={cn(
-            "fixed inset-x-0 bottom-0 z-50 mx-auto flex w-full max-w-sm touch-none flex-col",
+            "fixed inset-x-0 bottom-0 z-50 mx-auto flex max-h-[90vh] w-full max-w-sm touch-none flex-col",
             "rounded-t-[22px] border-t-[2.5px] border-ink bg-paper px-[22px] pb-7 pt-[22px]",
             "transition-transform data-[ending-style]:translate-y-full data-[starting-style]:translate-y-full motion-reduce:transition-none",
           )}
@@ -531,6 +549,13 @@ function SheetContent({
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState<string | undefined>()
 
+  // Confirmation de retrait (§8.6) : le récap lu serveur, le mode à appliquer
+  // ensuite (vider / remplacer), et les articles cochés-pour-retrait (par défaut
+  // tous les « retirables » — l'utilisateur peut en décocher au cas par cas).
+  const [removal, setRemoval] = useState<MealRemovalPreview | null>(null)
+  const [pendingMode, setPendingMode] = useState<MealRemovalMode | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+
   const occupied = target.slot !== null
 
   const filtered = useMemo(() => {
@@ -548,10 +573,65 @@ function SheetContent({
     })
   }
 
+  /**
+   * Vider / remplacer une case OCCUPÉE passe d'abord par le récap de retrait
+   * (§8.6) : on demande au serveur ce que ce repas a engendré. S'il y a des
+   * articles à retirer ou à ajuster, on affiche l'écran de confirmation explicite
+   * (niveau 3). Sinon (rien de généré, ou uniquement des articles cochés qu'on ne
+   * touche pas) on applique directement. Une case VIDE n'a rien à retirer.
+   */
+  function guardThen(mode: MealRemovalMode) {
+    if (!target.slot) {
+      // Placement sur case vide : aucun repas à défaire.
+      if (mode.kind === "replace") {
+        run(() => placeMeal(target.dateKey, target.creneau, mode.source))
+      }
+      return
+    }
+    const slotId = target.slot.id
+    setError(undefined)
+    startTransition(async () => {
+      const res = await previewMealRemoval(slotId)
+      if (!res.ok) {
+        setError(res.error)
+        return
+      }
+      const p = res.preview
+      if (p.retirables.length === 0 && p.ajustements.length === 0) {
+        // Rien à proposer au retrait → on applique sans questionner.
+        const r =
+          mode.kind === "clear"
+            ? await clearMeal(slotId)
+            : await placeMeal(target.dateKey, target.creneau, mode.source)
+        if (r.ok) onClose()
+        else setError(r.error)
+        return
+      }
+      setRemoval(p)
+      setPendingMode(mode)
+      setSelected(new Set(p.retirables.map((a) => a.listItemId)))
+      setStep("confirm")
+    })
+  }
+
+  function toggleSelected(id: string, next: boolean) {
+    setSelected((prev) => {
+      const copy = new Set(prev)
+      if (next) copy.add(id)
+      else copy.delete(id)
+      return copy
+    })
+  }
+
+  function confirmRemoval() {
+    if (!removal || !pendingMode || !target.slot) return
+    const slotId = target.slot.id
+    const ids = [...selected]
+    run(() => confirmMealRemoval(slotId, ids, pendingMode))
+  }
+
   function chooseRecipe(recipeId: string) {
-    run(() =>
-      placeMeal(target.dateKey, target.creneau, { kind: "recette", recipeId }),
-    )
+    guardThen({ kind: "replace", source: { kind: "recette", recipeId } })
   }
 
   function submitTexte() {
@@ -560,21 +640,22 @@ function SheetContent({
       setError("Entre le repas (ex. « restes »).")
       return
     }
-    run(() =>
-      placeMeal(target.dateKey, target.creneau, { kind: "texte", texte: clean }),
-    )
+    guardThen({ kind: "replace", source: { kind: "texte", texte: clean } })
   }
 
   function empty() {
     if (!target.slot) return
-    const slotId = target.slot.id
-    run(() => clearMeal(slotId))
+    guardThen({ kind: "clear" })
   }
 
   return (
     <>
       <Dialog.Title className="mb-1 text-center font-display text-[20px] uppercase leading-none tracking-tight text-ink">
-        {occupied ? "Modifier le repas" : "Placer un repas"}
+        {step === "confirm"
+          ? "Retirer les articles ?"
+          : occupied
+            ? "Modifier le repas"
+            : "Placer un repas"}
       </Dialog.Title>
       <p className="mb-[18px] text-center font-mono text-[11px] uppercase tracking-wide text-ink-soft">
         {target.contextLabel}
@@ -678,6 +759,18 @@ function SheetContent({
         </div>
       )}
 
+      {step === "confirm" && removal && pendingMode && (
+        <RemovalConfirm
+          removal={removal}
+          mode={pendingMode}
+          selected={selected}
+          onToggle={toggleSelected}
+          pending={pending}
+          onConfirm={confirmRemoval}
+          onBack={() => setStep("menu")}
+        />
+      )}
+
       {error && (
         <p
           role="alert"
@@ -687,6 +780,178 @@ function SheetContent({
         </p>
       )}
     </>
+  )
+}
+
+/**
+ * Écran de confirmation explicite du retrait (§8.6, niveau 3 — jamais atteint par
+ * la voix). Trois blocs :
+ *   - « À retirer » : lignes créées par la génération, non cochées, propres à ce
+ *     repas — chacune décochable au cas par cas (opt-out par article).
+ *   - « À ajuster à la main » : articles fusionnés ou partagés avec un autre repas
+ *     — JAMAIS retirés entièrement, seulement signalés avec leur quantité courante.
+ *   - « Conservés » : articles déjà cochés issus de ce repas — jamais touchés, ni
+ *     proposés ; affichés pour la seule transparence (§6).
+ * Aucun retrait n'a lieu tant que le bouton de confirmation n'est pas pressé.
+ */
+function RemovalConfirm({
+  removal,
+  mode,
+  selected,
+  onToggle,
+  pending,
+  onConfirm,
+  onBack,
+}: {
+  removal: MealRemovalPreview
+  mode: MealRemovalMode
+  selected: Set<string>
+  onToggle: (id: string, next: boolean) => void
+  pending: boolean
+  onConfirm: () => void
+  onBack: () => void
+}) {
+  const { retirables, ajustements, conserves, repasLabel } = removal
+  const nb = selected.size
+
+  const label = pending
+    ? "Application…"
+    : mode.kind === "clear"
+      ? nb > 0
+        ? `Retirer ${nb} et vider`
+        : "Vider la case"
+      : nb > 0
+        ? `Retirer ${nb} et remplacer`
+        : "Remplacer le repas"
+
+  return (
+    <div className="flex flex-col gap-4">
+      <p className="text-center text-[13px] leading-snug text-ink">
+        {retirables.length > 0 ? (
+          <>
+            <span className="font-medium">{retirables.length}</span> article
+            {retirables.length > 1 ? "s" : ""}{" "}
+            {retirables.length > 1 ? "venaient" : "venait"} de{" "}
+            <span className="font-medium">« {repasLabel} »</span>. Les retirer de la
+            liste ?
+          </>
+        ) : (
+          <>
+            Rien à retirer automatiquement pour{" "}
+            <span className="font-medium">« {repasLabel} »</span> — pense juste à
+            ajuster ce qui suit.
+          </>
+        )}
+      </p>
+
+      <div className="-mx-1 flex max-h-[50vh] flex-col gap-4 overflow-y-auto px-1">
+        {retirables.length > 0 && (
+          <section className="flex flex-col gap-2">
+            <h3 className="font-mono text-[11px] font-bold uppercase tracking-wide text-ink-soft">
+              À retirer ({retirables.length})
+            </h3>
+            <ul className="flex flex-col gap-1.5">
+              {retirables.map((a) => {
+                const on = selected.has(a.listItemId)
+                return (
+                  <li key={a.listItemId}>
+                    <div
+                      className={cn(
+                        "flex items-center gap-2 rounded-[8px] border-2 px-2 py-1.5 transition-colors",
+                        on ? "border-ink bg-paper-light" : "border-ink/25 bg-paper-light/60",
+                      )}
+                    >
+                      <RisoCheckbox
+                        checked={on}
+                        onCheckedChange={(next) => onToggle(a.listItemId, next)}
+                        aria-label={on ? `Ne pas retirer ${a.nom}` : `Retirer ${a.nom}`}
+                        className="size-9"
+                      />
+                      <span
+                        className={cn(
+                          "min-w-0 flex-1 text-[14px] font-medium leading-tight text-ink",
+                          !on && "text-ink-soft line-through",
+                        )}
+                      >
+                        {a.nom}
+                      </span>
+                      {a.quantites.length > 0 && (
+                        <span className="shrink-0 font-mono text-[12px] text-ink-soft">
+                          {formatQuantites(a.quantites)}
+                        </span>
+                      )}
+                    </div>
+                  </li>
+                )
+              })}
+            </ul>
+          </section>
+        )}
+
+        {ajustements.length > 0 && (
+          <section className="flex flex-col gap-2">
+            <h3 className="flex items-center gap-1.5 font-mono text-[11px] font-bold uppercase tracking-wide text-ink-soft">
+              <AlertTriangle className="size-3.5 text-brique" strokeWidth={2.5} aria-hidden />
+              À ajuster à la main ({ajustements.length})
+            </h3>
+            <ul className="flex flex-col gap-1.5">
+              {ajustements.map((a, i) => (
+                <li
+                  key={`aj-${a.nom}-${i}`}
+                  className="flex flex-col gap-0.5 rounded-[8px] border-2 border-dashed border-brique/50 bg-brique/5 px-2.5 py-1.5"
+                >
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="min-w-0 text-[13px] font-medium text-ink">{a.nom}</span>
+                    {a.quantites.length > 0 && (
+                      <span className="shrink-0 font-mono text-[12px] text-ink-soft">
+                        {formatQuantites(a.quantites)}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[11px] leading-snug text-ink-soft">
+                    {a.raison === "fusion"
+                      ? "Cet article existait déjà avant la génération — ajuste la quantité toi-même."
+                      : `Sert aussi à : ${a.partageAvec.join(", ")}.`}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {conserves.length > 0 && (
+          <section className="flex flex-col gap-2">
+            <h3 className="flex items-center gap-1.5 font-mono text-[11px] font-bold uppercase tracking-wide text-ink-soft">
+              <Info className="size-3.5" strokeWidth={2.5} aria-hidden />
+              Conservés — déjà cochés ({conserves.length})
+            </h3>
+            <ul className="flex flex-col gap-1">
+              {conserves.map((a, i) => (
+                <li
+                  key={`co-${a.nom}-${i}`}
+                  className="flex items-baseline justify-between gap-2 rounded-[8px] border-2 border-ink/15 bg-paper-light/60 px-2.5 py-1.5 text-[13px] text-ink-soft"
+                >
+                  <span className="min-w-0">{a.nom}</span>
+                  {a.quantites.length > 0 && (
+                    <span className="shrink-0 font-mono text-[11px]">
+                      {formatQuantites(a.quantites)}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <RisoButton onClick={onConfirm} disabled={pending} className="h-12 w-full text-sm">
+          <Trash2 className="size-4" strokeWidth={2.5} aria-hidden />
+          {label}
+        </RisoButton>
+        <BackToMenu onClick={onBack} disabled={pending} />
+      </div>
+    </div>
   )
 }
 
