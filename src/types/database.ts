@@ -14,6 +14,67 @@ export type Database = {
   }
   public: {
     Tables: {
+      brain_commands: {
+        Row: {
+          actions: Json
+          annule_at: string | null
+          annule_by: string | null
+          couple_id: string
+          created_at: string
+          id: string
+          statut: string
+          texte_dicte: string
+          undo_data: Json | null
+          user_id: string | null
+        }
+        Insert: {
+          actions?: Json
+          annule_at?: string | null
+          annule_by?: string | null
+          couple_id: string
+          created_at?: string
+          id?: string
+          statut?: string
+          texte_dicte: string
+          undo_data?: Json | null
+          user_id?: string | null
+        }
+        Update: {
+          actions?: Json
+          annule_at?: string | null
+          annule_by?: string | null
+          couple_id?: string
+          created_at?: string
+          id?: string
+          statut?: string
+          texte_dicte?: string
+          undo_data?: Json | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "brain_commands_annule_by_fkey"
+            columns: ["annule_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "brain_commands_couple_id_fkey"
+            columns: ["couple_id"]
+            isOneToOne: false
+            referencedRelation: "couples"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "brain_commands_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       categories: {
         Row: {
           couple_id: string
@@ -269,6 +330,103 @@ export type Database = {
             columns: ["owner_id"]
             isOneToOne: false
             referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      meal_slot_sources: {
+        Row: {
+          created_at: string
+          id: string
+          list_item_id: string
+          meal_slot_id: string
+          origine: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          list_item_id: string
+          meal_slot_id: string
+          origine: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          list_item_id?: string
+          meal_slot_id?: string
+          origine?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "meal_slot_sources_list_item_id_fkey"
+            columns: ["list_item_id"]
+            isOneToOne: false
+            referencedRelation: "list_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "meal_slot_sources_meal_slot_id_fkey"
+            columns: ["meal_slot_id"]
+            isOneToOne: false
+            referencedRelation: "meal_slots"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      meal_slots: {
+        Row: {
+          couple_id: string
+          created_at: string
+          created_by: string | null
+          creneau: string
+          date: string
+          id: string
+          recipe_id: string | null
+          texte: string | null
+          type: string
+        }
+        Insert: {
+          couple_id: string
+          created_at?: string
+          created_by?: string | null
+          creneau: string
+          date: string
+          id?: string
+          recipe_id?: string | null
+          texte?: string | null
+          type: string
+        }
+        Update: {
+          couple_id?: string
+          created_at?: string
+          created_by?: string | null
+          creneau?: string
+          date?: string
+          id?: string
+          recipe_id?: string | null
+          texte?: string | null
+          type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "meal_slots_couple_id_fkey"
+            columns: ["couple_id"]
+            isOneToOne: false
+            referencedRelation: "couples"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "meal_slots_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "meal_slots_recipe_id_fkey"
+            columns: ["recipe_id"]
+            isOneToOne: false
+            referencedRelation: "recipes"
             referencedColumns: ["id"]
           },
         ]

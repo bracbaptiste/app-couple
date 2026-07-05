@@ -33,7 +33,14 @@ const REFRESH_DEBOUNCE_MS = 250
 
 /** Une table à écouter, avec un filtre optionnel `colonne=eq.valeur`. */
 type Subscription = {
-  table: "lists" | "list_items" | "library_items" | "categories" | "tasks"
+  table:
+    | "lists"
+    | "list_items"
+    | "library_items"
+    | "categories"
+    | "tasks"
+    | "brain_commands"
+    | "meal_slots"
   /** Ex. `couple_id=eq.<uuid>` ou `list_id=eq.<uuid>`. Omis = toute la table (sous RLS). */
   filter?: string
 }
@@ -150,5 +157,36 @@ export function useRealtimeLibrary(coupleId: string) {
     { table: "library_items", filter: `couple_id=eq.${coupleId}` },
     { table: "categories", filter: `couple_id=eq.${coupleId}` },
     { table: "lists", filter: `couple_id=eq.${coupleId}` },
+  ])
+}
+
+/**
+ * Journal du Cerveau (/profile/journal). Écoute `brain_commands` du couple :
+ *   - une nouvelle commande vocale de l'un « s'imprime » chez l'autre ;
+ *   - une annulation (statut `fait` → `annule`) raye la ligne chez l'autre.
+ *
+ * Filtré par `couple_id` (colonne ≠ PK → la table est en REPLICA IDENTITY FULL,
+ * cf. migration V4, pour que les UPDATE d'annulation portent bien la ligne). La
+ * RLS reste la barrière : un autre couple ne reçoit jamais d'event.
+ */
+export function useRealtimeBrainJournal(coupleId: string) {
+  useRealtimeRefresh(`brain-journal:${coupleId}`, [
+    { table: "brain_commands", filter: `couple_id=eq.${coupleId}` },
+  ])
+}
+
+/**
+ * Planning (/planning). Écoute `meal_slots` du couple : un repas placé, déplacé
+ * ou retiré par l'un apparaît instantanément chez l'autre (§8.1). Le
+ * `router.refresh()` re-rend le Server Component pour l'URL COURANTE (le `?debut`
+ * de la semaine affichée est donc préservé, on ne saute pas à une autre semaine).
+ *
+ * Filtré par `couple_id` (colonne ≠ PK → `meal_slots` est en REPLICA IDENTITY
+ * FULL, cf. migration V4, pour que les UPDATE/DELETE portent bien la ligne). La
+ * RLS reste la barrière : un autre couple ne reçoit jamais d'event.
+ */
+export function useRealtimePlanning(coupleId: string) {
+  useRealtimeRefresh(`planning:${coupleId}`, [
+    { table: "meal_slots", filter: `couple_id=eq.${coupleId}` },
   ])
 }
