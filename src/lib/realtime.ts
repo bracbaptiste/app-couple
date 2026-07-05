@@ -176,17 +176,24 @@ export function useRealtimeBrainJournal(coupleId: string) {
 }
 
 /**
- * Planning (/planning). Écoute `meal_slots` du couple : un repas placé, déplacé
- * ou retiré par l'un apparaît instantanément chez l'autre (§8.1). Le
- * `router.refresh()` re-rend le Server Component pour l'URL COURANTE (le `?debut`
- * de la semaine affichée est donc préservé, on ne saute pas à une autre semaine).
+ * Planning (/planning). Écoute :
+ *   - `meal_slots` du couple : un repas placé, déplacé ou retiré par l'un
+ *     apparaît instantanément chez l'autre (§8.1) ;
+ *   - `tasks` : une tâche à échéance cochée / décochée (ou l'occurrence suivante
+ *     d'une récurrente, engendrée au cochage) se reflète dans la grille (§8.3).
  *
- * Filtré par `couple_id` (colonne ≠ PK → `meal_slots` est en REPLICA IDENTITY
- * FULL, cf. migration V4, pour que les UPDATE/DELETE portent bien la ligne). La
- * RLS reste la barrière : un autre couple ne reçoit jamais d'event.
+ * Le `router.refresh()` re-rend le Server Component pour l'URL COURANTE (le
+ * `?debut` de la semaine affichée est donc préservé, on ne saute pas de semaine).
+ *
+ * `meal_slots` est filtré par `couple_id` (colonne ≠ PK → REPLICA IDENTITY FULL,
+ * cf. migration V4, pour que les UPDATE/DELETE portent bien la ligne). `tasks`
+ * n'a pas de `couple_id` (rattachement via la liste parente) : on écoute sans
+ * filtre colonne, borné par la RLS — exactement comme `list_items` dans le hub.
+ * La RLS reste la barrière : un autre couple ne reçoit jamais d'event.
  */
 export function useRealtimePlanning(coupleId: string) {
   useRealtimeRefresh(`planning:${coupleId}`, [
     { table: "meal_slots", filter: `couple_id=eq.${coupleId}` },
+    { table: "tasks" },
   ])
 }
