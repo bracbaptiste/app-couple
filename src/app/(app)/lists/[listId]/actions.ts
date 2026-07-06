@@ -69,6 +69,7 @@ async function assertCoursesListOwned(
     .select("id, kind")
     .eq("id", listId)
     .eq("couple_id", coupleId)
+    .is("deleted_at", null)
     .maybeSingle()
   return data?.kind === "courses"
 }
@@ -119,10 +120,13 @@ export async function addItemToList(input: AddItemInput): Promise<ActionResult> 
     return { ok: false, error: "Liste introuvable." }
   }
 
-  // 1. Produit déjà connu du couple ? (pas de doublon dans library_items)
+  // 1. Produit déjà connu du couple ? (pas de doublon dans library_items). On
+  // cherche AUSSI parmi les produits soft-deleted (§4.4) : le seul match peut
+  // être une ligne supprimée, qu'on ressuscite plutôt que d'en recréer une
+  // (la contrainte unique(couple_id, name) l'imposerait de toute façon).
   const { data: existing } = await supabase
     .from("library_items")
-    .select("id, usage_count")
+    .select("id, usage_count, deleted_at")
     .eq("couple_id", coupleId)
     .ilike("name", escapeLike(name))
     .maybeSingle()
@@ -131,6 +135,13 @@ export async function addItemToList(input: AddItemInput): Promise<ActionResult> 
 
   if (existing) {
     libraryItemId = existing.id
+    if (existing.deleted_at) {
+      await supabase
+        .from("library_items")
+        .update({ deleted_at: null })
+        .eq("id", existing.id)
+        .eq("couple_id", coupleId)
+    }
     await supabase.rpc("increment_library_usage", { p_item_id: existing.id })
   } else {
     // Nouveau produit : on devine son rayon et on le range si ce rayon existe
@@ -158,16 +169,25 @@ export async function addItemToList(input: AddItemInput): Promise<ActionResult> 
     libraryItemId = created.id
   }
 
-  // 2. Déjà présent et non coché dans cette liste ? On ne duplique pas.
+  // 2. Déjà présent et non coché dans cette liste (actif OU soft-deleted) ? On
+  // ne duplique pas — une ligne supprimée est ressuscitée (§4.4) plutôt que
+  // laissée invisible pendant qu'un doublon actif serait créé à côté.
   const { data: dup } = await supabase
     .from("list_items")
-    .select("id")
+    .select("id, deleted_at")
     .eq("list_id", listId)
     .eq("library_item_id", libraryItemId)
     .eq("is_checked", false)
     .maybeSingle()
 
   if (dup) {
+    if (dup.deleted_at) {
+      await supabase
+        .from("list_items")
+        .update({ deleted_at: null })
+        .eq("id", dup.id)
+        .eq("list_id", listId)
+    }
     revalidatePath(`/lists/${listId}`)
     return { ok: true }
   }
@@ -279,7 +299,7 @@ export async function updateItemDetails(
 /*  Supprimer un article                                                       */
 /* -------------------------------------------------------------------------- */
 
-/** Retire un article de la liste (le produit reste dans la bibliothèque). */
+/** Retire (soft-delete) un article de la liste (le produit reste dans la bibliothèque). */
 export async function deleteItem(
   listId: string,
   itemId: string,
@@ -292,12 +312,37 @@ export async function deleteItem(
 
   const { error } = await supabase
     .from("list_items")
-    .delete()
+    .update({ deleted_at: new Date().toISOString() })
     .eq("id", itemId)
     .eq("list_id", listId)
 
   if (error) {
     return { ok: false, error: "Suppression impossible. Réessaie." }
+  }
+
+  revalidatePath(`/lists/${listId}`)
+  return { ok: true }
+}
+
+/** Restaure un article supprimé (toast ANNULER, PRD_V4.1 §4.5). */
+export async function restoreItem(
+  listId: string,
+  itemId: string,
+): Promise<ActionResult> {
+  const { supabase, coupleId } = await requireMembership()
+
+  if (!(await assertCoursesListOwned(supabase, listId, coupleId))) {
+    return { ok: false, error: "Liste introuvable." }
+  }
+
+  const { error } = await supabase
+    .from("list_items")
+    .update({ deleted_at: null })
+    .eq("id", itemId)
+    .eq("list_id", listId)
+
+  if (error) {
+    return { ok: false, error: "Restauration impossible. Réessaie." }
   }
 
   revalidatePath(`/lists/${listId}`)

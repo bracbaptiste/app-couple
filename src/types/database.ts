@@ -200,6 +200,7 @@ export type Database = {
           category_id: string | null
           couple_id: string
           created_at: string
+          deleted_at: string | null
           id: string
           last_used_at: string
           name: string
@@ -210,6 +211,7 @@ export type Database = {
           category_id?: string | null
           couple_id: string
           created_at?: string
+          deleted_at?: string | null
           id?: string
           last_used_at?: string
           name: string
@@ -220,6 +222,7 @@ export type Database = {
           category_id?: string | null
           couple_id?: string
           created_at?: string
+          deleted_at?: string | null
           id?: string
           last_used_at?: string
           name?: string
@@ -249,6 +252,7 @@ export type Database = {
           checked_at: string | null
           checked_by: string | null
           created_at: string
+          deleted_at: string | null
           id: string
           is_checked: boolean
           library_item_id: string
@@ -262,6 +266,7 @@ export type Database = {
           checked_at?: string | null
           checked_by?: string | null
           created_at?: string
+          deleted_at?: string | null
           id?: string
           is_checked?: boolean
           library_item_id: string
@@ -275,6 +280,7 @@ export type Database = {
           checked_at?: string | null
           checked_by?: string | null
           created_at?: string
+          deleted_at?: string | null
           id?: string
           is_checked?: boolean
           library_item_id?: string
@@ -319,6 +325,7 @@ export type Database = {
           couple_id: string
           created_at: string
           created_by: string | null
+          deleted_at: string | null
           id: string
           is_shared: boolean
           kind: string
@@ -330,6 +337,7 @@ export type Database = {
           couple_id: string
           created_at?: string
           created_by?: string | null
+          deleted_at?: string | null
           id?: string
           is_shared?: boolean
           kind?: string
@@ -341,6 +349,7 @@ export type Database = {
           couple_id?: string
           created_at?: string
           created_by?: string | null
+          deleted_at?: string | null
           id?: string
           is_shared?: boolean
           kind?: string
@@ -545,6 +554,7 @@ export type Database = {
           couple_id: string
           created_at: string
           created_by: string | null
+          deleted_at: string | null
           duree_minutes: number | null
           etapes: Json
           glucides_g: number | null
@@ -564,6 +574,7 @@ export type Database = {
           couple_id: string
           created_at?: string
           created_by?: string | null
+          deleted_at?: string | null
           duree_minutes?: number | null
           etapes?: Json
           glucides_g?: number | null
@@ -583,6 +594,7 @@ export type Database = {
           couple_id?: string
           created_at?: string
           created_by?: string | null
+          deleted_at?: string | null
           duree_minutes?: number | null
           etapes?: Json
           glucides_g?: number | null
@@ -619,6 +631,7 @@ export type Database = {
           added_by: string | null
           assigned_to: string | null
           created_at: string | null
+          deleted_at: string | null
           done_at: string | null
           done_by: string | null
           due_date: string | null
@@ -638,6 +651,7 @@ export type Database = {
           added_by?: string | null
           assigned_to?: string | null
           created_at?: string | null
+          deleted_at?: string | null
           done_at?: string | null
           done_by?: string | null
           due_date?: string | null
@@ -657,6 +671,7 @@ export type Database = {
           added_by?: string | null
           assigned_to?: string | null
           created_at?: string | null
+          deleted_at?: string | null
           done_at?: string | null
           done_by?: string | null
           due_date?: string | null
@@ -761,13 +776,13 @@ export type Database = {
         Args: { p_code: string; p_display_name: string }
         Returns: Json
       }
-      move_category: {
-        Args: { p_category_id: string; p_direction: string }
-        Returns: boolean
-      }
       merge_quantities: {
         Args: { p_additions: Json; p_existing: Json }
         Returns: Json
+      }
+      move_category: {
+        Args: { p_category_id: string; p_direction: string }
+        Returns: boolean
       }
       normaliser_nom: { Args: { raw: string }; Returns: string }
       update_recipe_with_ingredients: {

@@ -31,6 +31,7 @@ export default async function ImproveRecipePage({
     .select("id, titre")
     .eq("id", recipeId)
     .eq("couple_id", profile.couple_id)
+    .is("deleted_at", null)
     .maybeSingle()
 
   if (!recipe) notFound()

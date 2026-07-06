@@ -169,6 +169,7 @@ async function assertCoursesList(
     .select("id, name, kind")
     .eq("id", listId)
     .eq("couple_id", coupleId)
+    .is("deleted_at", null)
     .maybeSingle()
   return data?.kind === "courses" ? { id: data.id, name: data.name } : null
 }
@@ -187,6 +188,7 @@ async function assertTodoList(
     .select("id, kind")
     .eq("id", listId)
     .eq("couple_id", coupleId)
+    .is("deleted_at", null)
     .maybeSingle()
   return data?.kind === "todo" ? data.id : null
 }
@@ -215,6 +217,7 @@ async function resoudreTacheACocher(
       .select("id")
       .eq("couple_id", coupleId)
       .eq("kind", "todo")
+      .is("deleted_at", null)
     listIds = (lists ?? []).map((l) => l.id)
   }
   if (listIds.length === 0) return null
@@ -224,6 +227,7 @@ async function resoudreTacheACocher(
     .select("id, title, list_id, created_at")
     .in("list_id", listIds)
     .eq("is_done", false)
+    .is("deleted_at", null)
     .order("created_at", { ascending: false })
 
   const match = (tasks ?? []).find((t) => normaliserNom(t.title) === cleTitre)
@@ -258,9 +262,12 @@ async function trouverOuCreerArticle(
   cle: string,
   compterUsage: boolean,
 ): Promise<{ id: string; created: boolean } | null> {
+  // Cherche AUSSI parmi les produits soft-deleted (§4.4) : un match supprimé est
+  // ressuscité — traité comme « created » (recap « ajouté », undo = re-suppression)
+  // puisqu'il était invisible avant cette commande.
   const { data: matches } = await supabase
     .from("library_items")
-    .select("id, usage_count")
+    .select("id, usage_count, deleted_at")
     .eq("couple_id", coupleId)
     .eq("nom_normalise", cle)
     .order("usage_count", { ascending: false })
@@ -268,10 +275,18 @@ async function trouverOuCreerArticle(
 
   const existing = matches?.[0]
   if (existing) {
+    const resurrected = existing.deleted_at !== null
+    if (resurrected) {
+      await supabase
+        .from("library_items")
+        .update({ deleted_at: null })
+        .eq("id", existing.id)
+        .eq("couple_id", coupleId)
+    }
     if (compterUsage) {
       await supabase.rpc("increment_library_usage", { p_item_id: existing.id })
     }
-    return { id: existing.id, created: false }
+    return { id: existing.id, created: resurrected }
   }
 
   const categoryId = await resolveCategoryId(
@@ -462,6 +477,7 @@ export async function executeBrainActions(
           .select("id")
           .eq("couple_id", coupleId)
           .eq("nom_normalise", cle)
+          .is("deleted_at", null)
           .limit(1)
           .maybeSingle()
         if (!lib) {
@@ -479,6 +495,7 @@ export async function executeBrainActions(
           .eq("list_id", listId)
           .eq("library_item_id", lib.id)
           .eq("is_checked", !cocher)
+          .is("deleted_at", null)
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle()
@@ -619,6 +636,7 @@ export async function executeBrainActions(
             .select("id, titre")
             .eq("id", action.repas.recipe_id)
             .eq("couple_id", coupleId)
+            .is("deleted_at", null)
             .maybeSingle()
           if (!recipe) return { ok: false, error: "Recette introuvable." }
           type = "recette"
@@ -745,9 +763,12 @@ async function replayUndoOps(
       case "delete_list_item": {
         // Ne retirer que si la liste appartient au couple (double la RLS).
         if (!(await assertCoursesList(supabase, op.listId, coupleId))) undoFailure()
+        // Soft-delete (PRD_V4.1 §3.1) : plus jamais un DELETE physique, même
+        // pour annuler une ligne fraîchement créée (ou ressuscitée) par le
+        // Cerveau — les deux cas se défont de la même façon : re-masquer la ligne.
         const { error } = await supabase
           .from("list_items")
-          .delete()
+          .update({ deleted_at: new Date().toISOString() })
           .eq("id", op.itemId)
           .eq("list_id", op.listId)
         if (error) undoFailure()
@@ -800,18 +821,22 @@ async function replayUndoOps(
         break
       }
       case "delete_library_item": {
-        // Garde-fou cascade : ne supprimer que si plus AUCUN list_item ne
-        // référence cet article (sinon on laisse tel quel — annulation partielle
-        // sûre plutôt qu'une suppression en cascade).
+        // Garde-fou cascade : ne supprimer que si plus AUCUN list_item ACTIF ne
+        // référence cet article (une référence déjà soft-deleted ne compte pas —
+        // sinon on laisse tel quel — annulation partielle sûre plutôt qu'une
+        // suppression en cascade).
         const { count, error: countErr } = await supabase
           .from("list_items")
           .select("id", { count: "exact", head: true })
           .eq("library_item_id", op.itemId)
+          .is("deleted_at", null)
         if (countErr) undoFailure()
         if ((count ?? 0) === 0) {
+          // Soft-delete (PRD_V4.1 §3.1) : plus jamais un DELETE physique, que
+          // l'article ait été fraîchement créé ou ressuscité par cette commande.
           const { error } = await supabase
             .from("library_items")
-            .delete()
+            .update({ deleted_at: new Date().toISOString() })
             .eq("id", op.itemId)
             .eq("couple_id", coupleId)
           if (error) undoFailure()

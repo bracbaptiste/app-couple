@@ -241,10 +241,12 @@ export async function createRecipe(
       .insert(rows)
 
     // --- 5. Compensation : pas d'orphelin si les ingrédients échouent ------
+    // Soft-delete (PRD_V4.1 §3.1) : plus jamais un DELETE physique sur les 5
+    // tables, même pour cette compensation interne.
     if (ingErr) {
       await supabase
         .from("recipes")
-        .delete()
+        .update({ deleted_at: new Date().toISOString() })
         .eq("id", recipe.id)
         .eq("couple_id", coupleId)
       return {
@@ -289,6 +291,7 @@ export async function updateRecipe(
     .select("id")
     .eq("id", recipeId)
     .eq("couple_id", coupleId)
+    .is("deleted_at", null)
     .maybeSingle()
   if (!existing) return { ok: false, error: "Recette introuvable." }
 
@@ -332,15 +335,16 @@ export async function updateRecipe(
 export type DeleteRecipeResult = { ok: true } | { ok: false; error: string }
 
 /**
- * Supprime définitivement une recette du carnet (et ses ingrédients).
+ * Supprime (soft-delete) une recette du carnet. Les `recipe_ingredients` ne
+ * sont plus touchés (PRD_V4.1 §4.2) : ils réapparaissent intacts si la recette
+ * est restaurée.
  *
  * Déroulé :
  *   1. auth + `couple_id` (RLS) ;
  *   2. garde-fou : la recette doit appartenir au couple courant (on borne le
- *      `recipeId` reçu du client par `id` + `couple_id`, en plus de la RLS — cf.
- *      garde-fou DELETE : jamais de DELETE sans filtre couple_id/id) ;
- *   3. DELETE de la recette ; les `recipe_ingredients` partent atomiquement par
- *      la FK `ON DELETE CASCADE` (cf. migration v3), dans la même transaction.
+ *      `recipeId` reçu du client par `id` + `couple_id`, en plus de la RLS —
+ *      le soft-delete est un UPDATE, il obéit à la même règle) ;
+ *   3. UPDATE `deleted_at`.
  */
 export async function deleteRecipe(
   recipeId: string,
@@ -359,12 +363,32 @@ export async function deleteRecipe(
 
   const { error } = await supabase
     .from("recipes")
-    .delete()
+    .update({ deleted_at: new Date().toISOString() })
     .eq("id", recipeId)
     .eq("couple_id", coupleId)
 
   if (error) {
     return { ok: false, error: "Suppression impossible. Réessaie." }
+  }
+
+  revalidatePath("/recipes")
+  return { ok: true }
+}
+
+/** Restaure une recette supprimée (toast ANNULER, PRD_V4.1 §4.5). */
+export async function restoreRecipe(
+  recipeId: string,
+): Promise<DeleteRecipeResult> {
+  const { supabase, coupleId } = await requireMembership()
+
+  const { error } = await supabase
+    .from("recipes")
+    .update({ deleted_at: null })
+    .eq("id", recipeId)
+    .eq("couple_id", coupleId)
+
+  if (error) {
+    return { ok: false, error: "Restauration impossible. Réessaie." }
   }
 
   revalidatePath("/recipes")
@@ -493,6 +517,7 @@ export async function addRecipeIngredientsToList(
     .select("id, nombre_personnes")
     .eq("id", recipeId)
     .eq("couple_id", coupleId)
+    .is("deleted_at", null)
     .maybeSingle()
   if (!recipe) return { ok: false, error: "Recette introuvable." }
 
@@ -508,6 +533,7 @@ export async function addRecipeIngredientsToList(
     .select("id, kind")
     .eq("id", listId)
     .eq("couple_id", coupleId)
+    .is("deleted_at", null)
     .maybeSingle()
   if (!list) return { ok: false, error: "Liste introuvable." }
   if (list.kind === "todo") {
@@ -608,6 +634,7 @@ export async function previewRecipeIngredientsToList(
     .select("id, nombre_personnes")
     .eq("id", recipeId)
     .eq("couple_id", coupleId)
+    .is("deleted_at", null)
     .maybeSingle()
   if (!recipe) return { ok: false, error: "Recette introuvable." }
 
@@ -620,6 +647,7 @@ export async function previewRecipeIngredientsToList(
     .select("id, name, kind")
     .eq("id", listId)
     .eq("couple_id", coupleId)
+    .is("deleted_at", null)
     .maybeSingle()
   if (!list) return { ok: false, error: "Liste introuvable." }
   if (list.kind === "todo") {
@@ -710,6 +738,7 @@ export async function addIngredientToLibrary(
     .select("id")
     .eq("id", recipeId)
     .eq("couple_id", coupleId)
+    .is("deleted_at", null)
     .maybeSingle()
   if (!recipe) return { ok: false, error: "Recette introuvable." }
 
@@ -728,15 +757,31 @@ export async function addIngredientToLibrary(
   if (!cle) return { ok: false, error: "Ingrédient introuvable." }
 
   // 3. Déjà dans la bibliothèque (même clé normalisée) ? → ne rien créer (§6).
+  // Un match soft-deleted est ressuscité (§4.4) plutôt que laissé invisible en
+  // rapportant faussement « déjà dans ta bibliothèque ».
   const { data: existant } = await supabase
     .from("library_items")
-    .select("id")
+    .select("id, deleted_at")
     .eq("couple_id", coupleId)
     .eq("nom_normalise", cle)
     .limit(1)
     .maybeSingle()
 
-  if (existant) return { ok: true, created: false, nom }
+  if (existant) {
+    if (existant.deleted_at) {
+      const { error: resErr } = await supabase
+        .from("library_items")
+        .update({ deleted_at: null })
+        .eq("id", existant.id)
+        .eq("couple_id", coupleId)
+      if (resErr) {
+        return { ok: false, error: "Impossible d’ajouter à la bibliothèque. Réessaie." }
+      }
+      revalidatePath("/library")
+      return { ok: true, created: true, nom }
+    }
+    return { ok: true, created: false, nom }
+  }
 
   // 4. Nouveau produit : rangé dans le rayon deviné (sans IA), clé fournie §5.
   const categoryId = await resolveCategoryId(supabase, coupleId, guessCategory(nom))

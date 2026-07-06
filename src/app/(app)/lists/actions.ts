@@ -128,33 +128,54 @@ export async function renameList(
 }
 
 /**
- * Supprime une liste et ses articles.
- * On retire d'abord les `list_items` (filtrés par list_id), puis la liste
- * elle-même (filtrée par couple_id, en plus de la RLS).
+ * Supprime (soft-delete) une liste : ses articles et tâches ne sont PAS
+ * touchés — ils restent en base, masqués avec elle, et réapparaissent
+ * intacts si la liste est restaurée (PRD_V4.1 §4.2).
  */
 export async function deleteList(listId: string): Promise<ActionResult> {
   const { supabase, coupleId } = await requireMembership()
 
-  // Garde-fou : la liste doit appartenir au couple courant.
+  // Garde-fou : la liste doit appartenir au couple courant et ne pas être déjà supprimée.
   const { data: list } = await supabase
     .from("lists")
     .select("id")
     .eq("id", listId)
     .eq("couple_id", coupleId)
+    .is("deleted_at", null)
     .maybeSingle()
 
   if (!list) return { ok: false, error: "Liste introuvable." }
 
-  // Les articles et tâches sont supprimés atomiquement par les FK ON DELETE
-  // CASCADE, dans la même transaction que la liste.
-  const { error: deleteError } = await supabase
+  const { error: updateError } = await supabase
     .from("lists")
-    .delete()
+    .update({ deleted_at: new Date().toISOString() })
     .eq("id", listId)
     .eq("couple_id", coupleId)
 
-  if (deleteError) {
+  if (updateError) {
     return { ok: false, error: "Suppression impossible. Réessaie." }
+  }
+
+  revalidatePath("/lists")
+  return { ok: true }
+}
+
+/**
+ * Restaure une liste supprimée (toast ANNULER, PRD_V4.1 §4.5). Ses articles et
+ * tâches n'ayant jamais été touchés par la suppression, tout redevient intact
+ * d'un coup.
+ */
+export async function restoreList(listId: string): Promise<ActionResult> {
+  const { supabase, coupleId } = await requireMembership()
+
+  const { error } = await supabase
+    .from("lists")
+    .update({ deleted_at: null })
+    .eq("id", listId)
+    .eq("couple_id", coupleId)
+
+  if (error) {
+    return { ok: false, error: "Restauration impossible. Réessaie." }
   }
 
   revalidatePath("/lists")

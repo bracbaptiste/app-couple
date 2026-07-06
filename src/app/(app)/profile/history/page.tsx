@@ -28,6 +28,7 @@ export default async function TaskHistoryPage() {
     .from("tasks")
     .select("id, title, done_at, lists(name)")
     .eq("is_done", true)
+    .is("deleted_at", null)
     .order("done_at", { ascending: false })
     .limit(50)
 

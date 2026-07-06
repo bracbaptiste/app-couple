@@ -30,6 +30,7 @@ export default async function ListsPage() {
       .from("lists")
       .select("id, name, kind, is_shared, owner_id, created_at")
       .eq("couple_id", profile.couple_id)
+      .is("deleted_at", null)
       .order("position", { ascending: true }),
     // Membres du couple : on en tire le prénom de la conjointe pour la case
     // « Partager avec … » du sheet de création.
@@ -74,12 +75,14 @@ export default async function ListsPage() {
           .from("list_items")
           .select("list_id, is_checked, created_at, checked_at")
           .in("list_id", coursesIds)
+          .is("deleted_at", null)
       : Promise.resolve({ data: [] as const, error: null }),
     todoIds.length
       ? supabase
           .from("tasks")
           .select("list_id, is_done, created_at, done_at")
           .in("list_id", todoIds)
+          .is("deleted_at", null)
       : Promise.resolve({ data: [] as const, error: null }),
   ])
 

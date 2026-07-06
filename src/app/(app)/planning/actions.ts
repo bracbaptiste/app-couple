@@ -125,6 +125,7 @@ export async function placeMeal(
       .select("id")
       .eq("id", source.recipeId)
       .eq("couple_id", coupleId)
+      .is("deleted_at", null)
       .maybeSingle()
     if (!recipe) return { ok: false, error: "Recette introuvable." }
     type = "recette"
@@ -214,6 +215,7 @@ export async function togglePlanningTask(
     .select("id, kind")
     .eq("id", listId)
     .eq("couple_id", coupleId)
+    .is("deleted_at", null)
     .maybeSingle()
   if (list?.kind !== "todo") return { ok: false, error: "Tâche introuvable." }
 
@@ -385,6 +387,7 @@ async function rassemblerBesoins(
     .select("id, name, kind")
     .eq("id", listId)
     .eq("couple_id", coupleId)
+    .is("deleted_at", null)
     .maybeSingle()
   if (!list) return { ok: false, error: "Liste introuvable." }
   if (list.kind === "todo") {
@@ -442,6 +445,7 @@ async function rassemblerBesoins(
           .select("id, titre, nombre_personnes")
           .in("id", recipeIds)
           .eq("couple_id", coupleId)
+          .is("deleted_at", null)
       : Promise.resolve({ data: [] as { id: string; titre: string; nombre_personnes: number }[] }),
     recipeIds.length
       ? supabase
@@ -450,7 +454,11 @@ async function rassemblerBesoins(
           .in("recipe_id", recipeIds)
           .order("ordre", { ascending: true })
       : Promise.resolve({ data: [] as { recipe_id: string; nom_affiche: string; quantite: number | null; unite: string | null; ordre: number }[] }),
-    supabase.from("list_items").select("id").eq("list_id", listId),
+    supabase
+      .from("list_items")
+      .select("id")
+      .eq("list_id", listId)
+      .is("deleted_at", null),
   ])
 
   const recipesById = new Map(
@@ -859,10 +867,12 @@ async function rassemblerArticlesRepas(
   const itemIds = [...origineByItem.keys()]
 
   // 3. État courant des articles (RLS = cloisonnement couple) + leur libellé.
+  // Une ligne déjà soft-deleted n'est jamais reproposée au retrait (§4.3/§4.4).
   const { data: items } = await supabase
     .from("list_items")
     .select("id, list_id, quantities, is_checked, library_item_id")
     .in("id", itemIds)
+    .is("deleted_at", null)
 
   const libIds = [
     ...new Set((items ?? []).map((i) => i.library_item_id).filter(Boolean)),

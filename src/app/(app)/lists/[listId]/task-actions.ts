@@ -65,6 +65,7 @@ async function assertTodoListOwned(
     .select("id, kind")
     .eq("id", listId)
     .eq("couple_id", coupleId)
+    .is("deleted_at", null)
     .maybeSingle()
   return data?.kind === "todo"
 }
@@ -240,7 +241,11 @@ export async function toggleTask(
 /*  Suppression                                                               */
 /* -------------------------------------------------------------------------- */
 
-/** Supprime définitivement une tâche d'une to-do list. */
+/**
+ * Supprime (soft-delete) une tâche d'une to-do list. Une récurrente supprimée
+ * ne génère plus d'occurrence (la lecture qui les génère filtre `deleted_at`,
+ * cf. §4.3) ; la restauration rétablit tout.
+ */
 export async function deleteTask(
   listId: string,
   taskId: string,
@@ -253,12 +258,37 @@ export async function deleteTask(
 
   const { error } = await supabase
     .from("tasks")
-    .delete()
+    .update({ deleted_at: new Date().toISOString() })
     .eq("id", taskId)
     .eq("list_id", listId)
 
   if (error) {
     return { ok: false, error: "Suppression impossible. Réessaie." }
+  }
+
+  revalidatePath(`/lists/${listId}`)
+  return { ok: true }
+}
+
+/** Restaure une tâche supprimée (toast ANNULER, PRD_V4.1 §4.5). */
+export async function restoreTask(
+  listId: string,
+  taskId: string,
+): Promise<ActionResult> {
+  const { supabase, coupleId } = await requireMembership()
+
+  if (!(await assertTodoListOwned(supabase, listId, coupleId))) {
+    return { ok: false, error: "Liste introuvable." }
+  }
+
+  const { error } = await supabase
+    .from("tasks")
+    .update({ deleted_at: null })
+    .eq("id", taskId)
+    .eq("list_id", listId)
+
+  if (error) {
+    return { ok: false, error: "Restauration impossible. Réessaie." }
   }
 
   revalidatePath(`/lists/${listId}`)

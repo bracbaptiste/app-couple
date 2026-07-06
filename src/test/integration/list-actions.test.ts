@@ -20,10 +20,11 @@ vi.mock("@/lib/supabase/server", () => ({
 }))
 
 // Importé après les mocks (les actions résolvent createClient à l'exécution).
-import { addItemToList, toggleItem } from "@/app/(app)/lists/[listId]/actions"
-import { addTask } from "@/app/(app)/lists/[listId]/task-actions"
+import { addItemToList, toggleItem, deleteItem, restoreItem } from "@/app/(app)/lists/[listId]/actions"
+import { addTask, deleteTask, restoreTask } from "@/app/(app)/lists/[listId]/task-actions"
 import { sendToList } from "@/app/(app)/library/actions"
 import { createCouple, joinCouple } from "@/app/onboarding/actions"
+import { deleteList, restoreList } from "@/app/(app)/lists/actions"
 
 /** Filtre l'historique des requêtes sur (table, opération). */
 function callsFor(op: QueryContext["op"], table: string) {
@@ -122,6 +123,57 @@ describe("addItemToList — ajout d'un article", () => {
 
     expect(result).toEqual({ ok: true })
     expect(callsFor("insert", "list_items")).toHaveLength(0)
+  })
+
+  it("ressuscite un produit de bibliothèque soft-deleted (jamais un doublon actif, PRD_V4.1 §4.4)", async () => {
+    supa = createSupabaseMock({
+      handler: (ctx) => {
+        if (ctx.table === "profiles") return { data: { couple_id: "couple-1" } }
+        if (ctx.table === "lists") return { data: { id: "list-1", kind: "courses" } }
+        if (ctx.table === "library_items" && ctx.op === "select")
+          return {
+            data: { id: "lib-9", usage_count: 1, deleted_at: "2026-07-01T00:00:00.000Z" },
+          }
+        if (ctx.table === "library_items" && ctx.op === "update") return { error: null }
+        if (ctx.table === "list_items" && ctx.op === "select") return { data: null }
+        if (ctx.table === "list_items" && ctx.op === "insert") return { error: null }
+        return { data: null }
+      },
+    })
+
+    const result = await addItemToList({ listId: "list-1", rawName: "Lessive" })
+
+    expect(result).toEqual({ ok: true })
+    // Aucun nouveau produit créé : la ligne supprimée est ressuscitée à la place.
+    expect(callsFor("insert", "library_items")).toHaveLength(0)
+    const resurrect = callsFor("update", "library_items")
+    expect(resurrect).toHaveLength(1)
+    expect(resurrect[0].payload).toMatchObject({ deleted_at: null })
+    expect(resurrect[0].filters).toMatchObject({ id: "lib-9", couple_id: "couple-1" })
+  })
+
+  it("ressuscite une ligne de liste soft-deleted au lieu d'un doublon actif (PRD_V4.1 §4.4)", async () => {
+    supa = createSupabaseMock({
+      handler: (ctx) => {
+        if (ctx.table === "profiles") return { data: { couple_id: "couple-1" } }
+        if (ctx.table === "lists") return { data: { id: "list-1", kind: "courses" } }
+        if (ctx.table === "library_items" && ctx.op === "select")
+          return { data: { id: "lib-9", usage_count: 3, deleted_at: null } }
+        if (ctx.table === "list_items" && ctx.op === "select")
+          return { data: { id: "li-deleted", deleted_at: "2026-07-01T00:00:00.000Z" } }
+        if (ctx.table === "list_items" && ctx.op === "update") return { error: null }
+        return { data: null }
+      },
+    })
+
+    const result = await addItemToList({ listId: "list-1", rawName: "Lessive" })
+
+    expect(result).toEqual({ ok: true })
+    expect(callsFor("insert", "list_items")).toHaveLength(0)
+    const resurrect = callsFor("update", "list_items")
+    expect(resurrect).toHaveLength(1)
+    expect(resurrect[0].payload).toMatchObject({ deleted_at: null })
+    expect(resurrect[0].filters).toMatchObject({ id: "li-deleted", list_id: "list-1" })
   })
 
   it("rejette un nom vide sans toucher la base", async () => {
@@ -370,5 +422,134 @@ describe("onboarding — RPC atomiques", () => {
     const result = await joinCouple({}, form)
 
     expect(result.error).toContain("15 minutes")
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/*  Soft-delete & restauration (PRD_V4.1 §4)                                   */
+/* -------------------------------------------------------------------------- */
+
+describe("deleteList / restoreList — soft-delete d'une liste", () => {
+  it("pose deleted_at sur la liste SANS toucher aux list_items", async () => {
+    supa = createSupabaseMock({
+      handler: (ctx) => {
+        if (ctx.table === "profiles") return { data: { couple_id: "couple-1" } }
+        if (ctx.table === "lists") return { data: { id: "list-1" }, error: null }
+        return { data: null }
+      },
+    })
+
+    const result = await deleteList("list-1")
+
+    expect(result).toEqual({ ok: true })
+    // Seule la liste est mise à jour, jamais un DELETE, jamais list_items.
+    expect(callsFor("delete", "lists")).toHaveLength(0)
+    expect(callsFor("update", "list_items")).toHaveLength(0)
+    const update = callsFor("update", "lists")
+    expect(update).toHaveLength(1)
+    expect(update[0].payload).toMatchObject({ deleted_at: expect.any(String) })
+    expect(update[0].filters).toMatchObject({ id: "list-1", couple_id: "couple-1" })
+  })
+
+  it("restaure une liste sans recréer ni toucher ses items", async () => {
+    supa = createSupabaseMock({
+      handler: (ctx) => {
+        if (ctx.table === "profiles") return { data: { couple_id: "couple-1" } }
+        if (ctx.table === "lists") return { error: null }
+        return { data: null }
+      },
+    })
+
+    const result = await restoreList("list-1")
+
+    expect(result).toEqual({ ok: true })
+    expect(callsFor("insert", "list_items")).toHaveLength(0)
+    expect(callsFor("update", "list_items")).toHaveLength(0)
+    const update = callsFor("update", "lists")
+    expect(update).toHaveLength(1)
+    expect(update[0].payload).toMatchObject({ deleted_at: null })
+    expect(update[0].filters).toMatchObject({ id: "list-1", couple_id: "couple-1" })
+  })
+})
+
+describe("deleteItem / restoreItem — soft-delete d'un article", () => {
+  it("pose deleted_at filtré id + list_id, jamais un DELETE", async () => {
+    supa = createSupabaseMock({
+      handler: (ctx) => {
+        if (ctx.table === "profiles") return { data: { couple_id: "couple-1" } }
+        if (ctx.table === "lists") return { data: { id: "list-1", kind: "courses" } }
+        if (ctx.table === "list_items") return { error: null }
+        return { data: null }
+      },
+    })
+
+    const result = await deleteItem("list-1", "item-1")
+
+    expect(result).toEqual({ ok: true })
+    expect(callsFor("delete", "list_items")).toHaveLength(0)
+    const update = callsFor("update", "list_items")
+    expect(update).toHaveLength(1)
+    expect(update[0].payload).toMatchObject({ deleted_at: expect.any(String) })
+    expect(update[0].filters).toMatchObject({ id: "item-1", list_id: "list-1" })
+  })
+
+  it("restaure un article filtré id + list_id", async () => {
+    supa = createSupabaseMock({
+      handler: (ctx) => {
+        if (ctx.table === "profiles") return { data: { couple_id: "couple-1" } }
+        if (ctx.table === "lists") return { data: { id: "list-1", kind: "courses" } }
+        if (ctx.table === "list_items") return { error: null }
+        return { data: null }
+      },
+    })
+
+    const result = await restoreItem("list-1", "item-1")
+
+    expect(result).toEqual({ ok: true })
+    const update = callsFor("update", "list_items")
+    expect(update).toHaveLength(1)
+    expect(update[0].payload).toMatchObject({ deleted_at: null })
+    expect(update[0].filters).toMatchObject({ id: "item-1", list_id: "list-1" })
+  })
+})
+
+describe("deleteTask / restoreTask — soft-delete d'une tâche", () => {
+  it("pose deleted_at filtré id + list_id, jamais un DELETE", async () => {
+    supa = createSupabaseMock({
+      handler: (ctx) => {
+        if (ctx.table === "profiles") return { data: { couple_id: "couple-1" } }
+        if (ctx.table === "lists") return { data: { id: "todo-1", kind: "todo" } }
+        if (ctx.table === "tasks") return { error: null }
+        return { data: null }
+      },
+    })
+
+    const result = await deleteTask("todo-1", "task-1")
+
+    expect(result).toEqual({ ok: true })
+    expect(callsFor("delete", "tasks")).toHaveLength(0)
+    const update = callsFor("update", "tasks")
+    expect(update).toHaveLength(1)
+    expect(update[0].payload).toMatchObject({ deleted_at: expect.any(String) })
+    expect(update[0].filters).toMatchObject({ id: "task-1", list_id: "todo-1" })
+  })
+
+  it("restaure une tâche filtrée id + list_id", async () => {
+    supa = createSupabaseMock({
+      handler: (ctx) => {
+        if (ctx.table === "profiles") return { data: { couple_id: "couple-1" } }
+        if (ctx.table === "lists") return { data: { id: "todo-1", kind: "todo" } }
+        if (ctx.table === "tasks") return { error: null }
+        return { data: null }
+      },
+    })
+
+    const result = await restoreTask("todo-1", "task-1")
+
+    expect(result).toEqual({ ok: true })
+    const update = callsFor("update", "tasks")
+    expect(update).toHaveLength(1)
+    expect(update[0].payload).toMatchObject({ deleted_at: null })
+    expect(update[0].filters).toMatchObject({ id: "task-1", list_id: "todo-1" })
   })
 })

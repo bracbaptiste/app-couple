@@ -69,11 +69,13 @@ export default async function PlanningPage({
       .from("lists")
       .select("id, name, kind")
       .eq("couple_id", profile.couple_id)
+      .is("deleted_at", null)
       .order("position", { ascending: true }),
     supabase
       .from("recipes")
       .select("id, titre")
       .eq("couple_id", profile.couple_id)
+      .is("deleted_at", null)
       .order("titre", { ascending: true }),
   ])
 
@@ -105,6 +107,7 @@ export default async function PlanningPage({
       .in("list_id", todoListIds)
       .gte("due_date", mondayKey)
       .lte("due_date", sundayKey)
+      .is("deleted_at", null)
     if (tasksRes.error) throw new Error("Impossible de charger le planning")
     taskRows = tasksRes.data ?? []
   }

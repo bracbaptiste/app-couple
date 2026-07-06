@@ -94,6 +94,14 @@ export function createSupabaseMock(opts: {
         state.filters[`ilike:${col}`] = val
         return builder
       },
+      is(col: string, val: unknown) {
+        state.filters[`is:${col}`] = val
+        return builder
+      },
+      in(col: string, vals: unknown) {
+        state.filters[`in:${col}`] = vals
+        return builder
+      },
       maybeSingle() {
         return run("maybeSingle")
       },

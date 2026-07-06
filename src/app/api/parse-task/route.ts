@@ -82,6 +82,7 @@ export async function POST(request: Request) {
     .from("lists")
     .select("id, name")
     .eq("kind", "todo")
+    .is("deleted_at", null)
     .order("position", { ascending: true })
 
   const { data: profilesData } = await supabase

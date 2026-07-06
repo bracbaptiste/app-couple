@@ -100,7 +100,8 @@ export async function POST(request: Request) {
     supabase
       .from("recipes")
       .select("id, titre, type_plat, tags")
-      .eq("couple_id", profile.couple_id),
+      .eq("couple_id", profile.couple_id)
+      .is("deleted_at", null),
     supabase
       .from("meal_slots")
       .select("date, creneau")

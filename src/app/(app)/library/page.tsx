@@ -35,7 +35,8 @@ export default async function LibraryPage() {
     supabase
       .from("library_items")
       .select("id, name, category_id, usage_count, last_used_at")
-      .eq("couple_id", profile.couple_id),
+      .eq("couple_id", profile.couple_id)
+      .is("deleted_at", null),
     supabase
       .from("categories")
       .select("id, name")
@@ -46,6 +47,7 @@ export default async function LibraryPage() {
       .select("id, name")
       .eq("couple_id", profile.couple_id)
       .eq("kind", "courses")
+      .is("deleted_at", null)
       .order("position", { ascending: true }),
   ])
 

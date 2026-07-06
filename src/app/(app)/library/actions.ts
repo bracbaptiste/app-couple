@@ -56,6 +56,7 @@ async function getOwnedLibraryItem(
     .select("id, usage_count")
     .eq("id", libraryItemId)
     .eq("couple_id", coupleId)
+    .is("deleted_at", null)
     .maybeSingle()
   return data ?? null
 }
@@ -135,15 +136,30 @@ export async function addLibraryItem(
   const { supabase, coupleId } = await requireMembership()
 
   // Déjà connu du couple ? On ne duplique pas (contrainte unique couple_id+name).
+  // Un match soft-deleted est ressuscité (§4.4) plutôt que bloqué : sinon on
+  // refuserait de recréer un produit que l'utilisateur vient de supprimer, sans
+  // jamais pouvoir le récupérer depuis cet écran.
   const { data: existing } = await supabase
     .from("library_items")
-    .select("id")
+    .select("id, deleted_at")
     .eq("couple_id", coupleId)
     .ilike("name", escapeLike(name))
     .maybeSingle()
 
   if (existing) {
-    return { ok: false, error: `« ${name} » est déjà dans ta bibliothèque.` }
+    if (!existing.deleted_at) {
+      return { ok: false, error: `« ${name} » est déjà dans ta bibliothèque.` }
+    }
+    const { error } = await supabase
+      .from("library_items")
+      .update({ deleted_at: null })
+      .eq("id", existing.id)
+      .eq("couple_id", coupleId)
+    if (error) {
+      return { ok: false, error: "Impossible d’ajouter l’article. Réessaie." }
+    }
+    revalidatePath("/library")
+    return { ok: true }
   }
 
   // Rayon : choix explicite (validé) prioritaire, sinon on le devine.
@@ -213,21 +229,32 @@ export async function sendToList(
     .select("id, kind")
     .eq("id", listId)
     .eq("couple_id", coupleId)
+    .is("deleted_at", null)
     .maybeSingle()
   if (!list || list.kind !== "courses") {
     return { ok: false, error: "Choisis une liste de courses." }
   }
 
-  // Déjà présent et non coché dans cette liste ? On ne duplique pas.
+  // Déjà présent et non coché dans cette liste (actif OU soft-deleted) ? On ne
+  // duplique pas — une ligne supprimée est ressuscitée (§4.4).
   const { data: dup } = await supabase
     .from("list_items")
-    .select("id")
+    .select("id, deleted_at")
     .eq("list_id", listId)
     .eq("library_item_id", libraryItemId)
     .eq("is_checked", false)
     .maybeSingle()
 
-  if (!dup) {
+  if (dup?.deleted_at) {
+    const { error: resErr } = await supabase
+      .from("list_items")
+      .update({ deleted_at: null })
+      .eq("id", dup.id)
+      .eq("list_id", listId)
+    if (resErr) {
+      return { ok: false, error: "Impossible d’envoyer l’article. Réessaie." }
+    }
+  } else if (!dup) {
     const { error: insErr } = await supabase.from("list_items").insert({
       list_id: listId,
       library_item_id: libraryItemId,
@@ -275,6 +302,7 @@ export async function sendManyToList(
     .select("id, kind")
     .eq("id", listId)
     .eq("couple_id", coupleId)
+    .is("deleted_at", null)
     .maybeSingle()
   if (!list || list.kind !== "courses") {
     return { ok: false, error: "Choisis une liste de courses." }
@@ -285,31 +313,54 @@ export async function sendManyToList(
     .from("library_items")
     .select("id, usage_count")
     .eq("couple_id", coupleId)
+    .is("deleted_at", null)
     .in("id", libraryItemIds)
 
   if (!owned || owned.length === 0) {
     return { ok: false, error: "Articles introuvables." }
   }
 
-  // Articles déjà présents non cochés dans la liste : on ne les duplique pas.
+  // Articles déjà présents non cochés dans la liste (actifs OU soft-deleted) :
+  // un actif n'est pas dupliqué, un supprimé est ressuscité (§4.4) plutôt que
+  // laissé invisible pendant qu'un doublon actif serait créé à côté.
   const { data: present } = await supabase
     .from("list_items")
-    .select("library_item_id")
+    .select("id, library_item_id, deleted_at")
     .eq("list_id", listId)
     .eq("is_checked", false)
     .in(
       "library_item_id",
       owned.map((p) => p.id),
     )
-  const alreadyThere = new Set((present ?? []).map((r) => r.library_item_id))
+  const activeByProduct = new Map<string, string>()
+  const deletedRowByProduct = new Map<string, string>()
+  for (const row of present ?? []) {
+    if (row.deleted_at) deletedRowByProduct.set(row.library_item_id, row.id)
+    else activeByProduct.set(row.library_item_id, row.id)
+  }
+
+  const toResurrect = owned
+    .filter((p) => !activeByProduct.has(p.id) && deletedRowByProduct.has(p.id))
+    .map((p) => deletedRowByProduct.get(p.id) as string)
 
   const toInsert = owned
-    .filter((p) => !alreadyThere.has(p.id))
+    .filter((p) => !activeByProduct.has(p.id) && !deletedRowByProduct.has(p.id))
     .map((p) => ({
       list_id: listId,
       library_item_id: p.id,
       added_by: userId,
     }))
+
+  if (toResurrect.length > 0) {
+    const { error: resErr } = await supabase
+      .from("list_items")
+      .update({ deleted_at: null })
+      .eq("list_id", listId)
+      .in("id", toResurrect)
+    if (resErr) {
+      return { ok: false, error: "Impossible d’envoyer les articles. Réessaie." }
+    }
+  }
 
   if (toInsert.length > 0) {
     const { error: insErr } = await supabase.from("list_items").insert(toInsert)
@@ -363,6 +414,7 @@ export async function updateLibraryItem(
     .select("id, name, category_id")
     .eq("id", libraryItemId)
     .eq("couple_id", coupleId)
+    .is("deleted_at", null)
     .maybeSingle()
   if (!product) return { ok: false, error: "Article introuvable." }
 
@@ -410,7 +462,7 @@ export async function updateLibraryItem(
 /* -------------------------------------------------------------------------- */
 
 /**
- * Supprime un produit mal saisi de la bibliothèque.
+ * Supprime (soft-delete) un produit mal saisi de la bibliothèque.
  *
  * Contrainte d'intégrité : la FK `list_items.library_item_id` est en
  * `on delete cascade` — supprimer un produit encore référencé effacerait
@@ -418,7 +470,8 @@ export async function updateLibraryItem(
  * la suppression tant que le produit est utilisé, et on indique combien de
  * listes le référencent. L'utilisateur doit d'abord retirer l'article de ses
  * listes. Un produit non référencé (1 seule occurrence historique, déjà retirée)
- * est supprimé proprement.
+ * est soft-delete proprement (PRD_V4.1 §4.2 : la garde est conservée telle
+ * quelle, seul le DELETE final devient un UPDATE `deleted_at`).
  */
 export async function deleteLibraryItem(
   libraryItemId: string,
@@ -428,11 +481,14 @@ export async function deleteLibraryItem(
   const product = await getOwnedLibraryItem(supabase, libraryItemId, coupleId)
   if (!product) return { ok: false, error: "Article introuvable." }
 
-  // Encore référencé par des list_items ? On bloque (cascade destructrice).
+  // Encore référencé par des list_items actifs ? On bloque (cascade destructrice).
+  // Une référence déjà soft-deleted ne compte pas : invisible partout, elle ne
+  // doit pas bloquer indéfiniment la suppression du produit.
   const { count } = await supabase
     .from("list_items")
     .select("id", { count: "exact", head: true })
     .eq("library_item_id", libraryItemId)
+    .is("deleted_at", null)
 
   if (count && count > 0) {
     return {
@@ -443,12 +499,32 @@ export async function deleteLibraryItem(
 
   const { error } = await supabase
     .from("library_items")
-    .delete()
+    .update({ deleted_at: new Date().toISOString() })
     .eq("id", libraryItemId)
     .eq("couple_id", coupleId)
 
   if (error) {
     return { ok: false, error: "Suppression impossible. Réessaie." }
+  }
+
+  revalidatePath("/library")
+  return { ok: true }
+}
+
+/** Restaure un produit de la bibliothèque supprimé (toast ANNULER, PRD_V4.1 §4.5). */
+export async function restoreLibraryItem(
+  libraryItemId: string,
+): Promise<ActionResult> {
+  const { supabase, coupleId } = await requireMembership()
+
+  const { error } = await supabase
+    .from("library_items")
+    .update({ deleted_at: null })
+    .eq("id", libraryItemId)
+    .eq("couple_id", coupleId)
+
+  if (error) {
+    return { ok: false, error: "Restauration impossible. Réessaie." }
   }
 
   revalidatePath("/library")

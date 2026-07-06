@@ -46,6 +46,7 @@ export default async function RecipeDetailPage({
     )
     .eq("id", recipeId)
     .eq("couple_id", profile.couple_id)
+    .is("deleted_at", null)
     .maybeSingle()
 
   if (!recipe) notFound()
@@ -62,6 +63,7 @@ export default async function RecipeDetailPage({
     .from("lists")
     .select("id, name, kind")
     .eq("couple_id", profile.couple_id)
+    .is("deleted_at", null)
     .order("position", { ascending: true })
 
   const listesCourses: ListeCible[] = (listsData ?? [])

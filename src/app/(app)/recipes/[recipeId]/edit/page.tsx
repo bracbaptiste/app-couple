@@ -44,6 +44,7 @@ export default async function EditRecipePage({
     )
     .eq("id", recipeId)
     .eq("couple_id", profile.couple_id)
+    .is("deleted_at", null)
     .maybeSingle()
 
   if (!recipe) notFound()

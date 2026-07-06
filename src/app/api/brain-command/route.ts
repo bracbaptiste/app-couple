@@ -118,6 +118,7 @@ export async function POST(request: Request) {
       supabase
         .from("lists")
         .select("id, name, kind")
+        .is("deleted_at", null)
         .order("position", { ascending: true }),
       supabase
         .from("profiles")
@@ -127,12 +128,14 @@ export async function POST(request: Request) {
         .from("library_items")
         .select("id, name, nom_normalise")
         .eq("couple_id", profile.couple_id)
+        .is("deleted_at", null)
         .order("usage_count", { ascending: false })
         .limit(BIBLIO_MAX),
       supabase
         .from("recipes")
         .select("id, titre")
-        .eq("couple_id", profile.couple_id),
+        .eq("couple_id", profile.couple_id)
+        .is("deleted_at", null),
       supabase
         .from("meal_slots")
         .select("date, creneau, type, texte, recipes(titre)")

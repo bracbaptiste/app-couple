@@ -33,7 +33,8 @@ export default async function CategoriesPage() {
     supabase
       .from("library_items")
       .select("category_id")
-      .eq("couple_id", profile.couple_id),
+      .eq("couple_id", profile.couple_id)
+      .is("deleted_at", null),
   ])
 
   if (categoriesRes.error || libItemsRes.error) {

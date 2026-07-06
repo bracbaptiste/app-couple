@@ -101,6 +101,7 @@ export async function lireConsultation(
       .select("id, name, kind")
       .eq("id", cible.liste_id)
       .eq("couple_id", coupleId)
+      .is("deleted_at", null)
       .maybeSingle()
     if (!list || list.kind === "todo") {
       return { ok: false, error: "Liste introuvable." }
@@ -112,6 +113,7 @@ export async function lireConsultation(
       .select("quantities, created_at, library_items(name)")
       .eq("list_id", cible.liste_id)
       .eq("is_checked", false)
+      .is("deleted_at", null)
       .order("created_at", { ascending: true })
 
     const articles = (items ?? []).map((it) => {
@@ -161,6 +163,7 @@ export async function lireConsultation(
     .select("id")
     .eq("couple_id", coupleId)
     .eq("kind", "todo")
+    .is("deleted_at", null)
   const todoIds = (lists ?? []).map((l) => l.id)
 
   let taches: { titre: string; fait: boolean }[] = []
@@ -170,6 +173,7 @@ export async function lireConsultation(
       .select("title, is_done")
       .in("list_id", todoIds)
       .eq("due_date", cible.date)
+      .is("deleted_at", null)
       .order("is_done", { ascending: true })
     taches = (rows ?? []).map((t) => ({ titre: t.title, fait: t.is_done }))
   }

@@ -58,6 +58,7 @@ export default async function ListDetailPage({
     .select("id, name, kind, is_shared, owner_id")
     .eq("id", listId)
     .eq("couple_id", profile.couple_id)
+    .is("deleted_at", null)
     .maybeSingle()
 
   if (listError) throw new Error("Impossible de charger la liste")
@@ -76,6 +77,7 @@ export default async function ListDetailPage({
         )
         .eq("list_id", listId)
         .eq("is_done", false)
+        .is("deleted_at", null)
         .order("created_at", { ascending: true }),
       supabase
         .from("tasks")
@@ -84,6 +86,7 @@ export default async function ListDetailPage({
         )
         .eq("list_id", listId)
         .eq("is_done", true)
+        .is("deleted_at", null)
         .order("done_at", { ascending: false })
         .limit(10),
       supabase
@@ -97,6 +100,7 @@ export default async function ListDetailPage({
         .select("id, name")
         .eq("couple_id", profile.couple_id)
         .eq("kind", "todo")
+        .is("deleted_at", null)
         .order("position", { ascending: true }),
     ])
 
@@ -181,6 +185,7 @@ export default async function ListDetailPage({
         "id, quantity, quantities, note, is_checked, checked_at, added_by, created_at, library_item_id, library_items(name, category_id)",
       )
       .eq("list_id", listId)
+      .is("deleted_at", null)
       .or(`is_checked.eq.false,checked_at.gte.${recentCheckedCutoff}`)
       .order("created_at", { ascending: true }),
     supabase

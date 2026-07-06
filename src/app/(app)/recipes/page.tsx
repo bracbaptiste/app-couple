@@ -29,6 +29,7 @@ export default async function RecipesPage() {
       "id, titre, duree_minutes, type_plat, tags, calories_par_portion",
     )
     .eq("couple_id", profile.couple_id)
+    .is("deleted_at", null)
     .order("created_at", { ascending: false })
 
   // Borne `type_plat`/`tags` au jeu fermé §10 même à la lecture : une valeur

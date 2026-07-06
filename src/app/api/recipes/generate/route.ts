@@ -95,6 +95,7 @@ export async function POST(request: Request) {
       )
       .eq("id", recipeId)
       .eq("couple_id", profile.couple_id)
+      .is("deleted_at", null)
       .maybeSingle()
     if (!recipe) return erreur("Recette introuvable.", 404)
 

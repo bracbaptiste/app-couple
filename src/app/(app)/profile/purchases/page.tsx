@@ -30,6 +30,7 @@ export default async function PurchaseHistoryPage() {
     .from("list_items")
     .select("id, checked_at, library_items(name), lists(name)")
     .eq("is_checked", true)
+    .is("deleted_at", null)
     .order("checked_at", { ascending: false })
     .limit(50)
 
