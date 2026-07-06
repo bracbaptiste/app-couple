@@ -41,6 +41,7 @@ type Subscription = {
     | "tasks"
     | "brain_commands"
     | "meal_slots"
+    | "recipes"
   /** Ex. `couple_id=eq.<uuid>` ou `list_id=eq.<uuid>`. Omis = toute la table (sous RLS). */
   filter?: string
 }
@@ -157,6 +158,17 @@ export function useRealtimeLibrary(coupleId: string) {
     { table: "library_items", filter: `couple_id=eq.${coupleId}` },
     { table: "categories", filter: `couple_id=eq.${coupleId}` },
     { table: "lists", filter: `couple_id=eq.${coupleId}` },
+  ])
+}
+
+/**
+ * Carnet de recettes (/recipes). Écoute `recipes` du couple (ajout, édition,
+ * suppression/restauration) — la table a rejoint la publication Realtime en
+ * V4.1 (§10), au même titre que les 4 autres entités du soft-delete.
+ */
+export function useRealtimeRecipes(coupleId: string) {
+  useRealtimeRefresh(`recipes:${coupleId}`, [
+    { table: "recipes", filter: `couple_id=eq.${coupleId}` },
   ])
 }
 

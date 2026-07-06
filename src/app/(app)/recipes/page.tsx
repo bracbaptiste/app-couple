@@ -50,7 +50,7 @@ export default async function RecipesPage() {
   return (
     <section className="mx-auto w-full max-w-sm">
       <h1 className="mb-4 font-display text-xl uppercase text-ink">Recettes</h1>
-      <RecipesBrowser recipes={recipes} />
+      <RecipesBrowser recipes={recipes} coupleId={profile.couple_id} />
     </section>
   )
 }

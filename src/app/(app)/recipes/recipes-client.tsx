@@ -10,6 +10,7 @@ import { GhostTile } from "@/components/shared/ghost-tile"
 import { NewRecipeSheet } from "@/components/recipes/NewRecipeSheet"
 import { UndoToast } from "@/components/shared/undo-toast"
 import { useSwipeReveal } from "@/lib/hooks/useSwipeReveal"
+import { useRealtimeRecipes } from "@/lib/realtime"
 import { deleteRecipe, restoreRecipe, type DeleteRecipeResult } from "./actions"
 import { cn } from "@/lib/utils"
 import {
@@ -50,7 +51,15 @@ function normalize(value: string): string {
  * contient la recherche ET (aucun type sélectionné OU son type est sélectionné)
  * ET elle porte TOUTES les étiquettes sélectionnées.
  */
-export function RecipesBrowser({ recipes }: { recipes: RecipeCardView[] }) {
+export function RecipesBrowser({
+  recipes,
+  coupleId,
+}: {
+  recipes: RecipeCardView[]
+  coupleId: string
+}) {
+  useRealtimeRecipes(coupleId)
+
   const [query, setQuery] = useState("")
   const [selectedTypes, setSelectedTypes] = useState<Set<TypePlat>>(new Set())
   const [selectedTags, setSelectedTags] = useState<Set<Tag>>(new Set())
