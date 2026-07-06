@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { ChevronRight, LayoutGrid } from "lucide-react"
 import { useActionState, useState, useTransition } from "react"
 
@@ -12,7 +13,12 @@ import { Field, FormFeedback, SubmitButton } from "@/app/(auth)/form-ui"
 import { signOut } from "@/app/(auth)/actions"
 import { clearOfflineData } from "@/lib/offline/db"
 
-import { leaveCouple, updateProfile, type ActionResult } from "./actions"
+import {
+  leaveCouple,
+  swapColors,
+  updateProfile,
+  type ActionResult,
+} from "./actions"
 
 type Color = "sauge" | "brique"
 
@@ -54,10 +60,12 @@ export function CategoriesTile() {
 export function IdentitySection({
   displayName,
   color,
+  partnerName,
   partnerColor,
 }: {
   displayName: string
   color: Color
+  partnerName: string | null
   partnerColor: Color | null
 }) {
   const [state, formAction] = useActionState<ActionResult | null, FormData>(
@@ -141,7 +149,97 @@ export function IdentitySection({
           Enregistrer
         </SubmitButton>
       </form>
+
+      {partnerColor && (
+        <SwapColorsAction
+          myColor={color}
+          partnerName={partnerName || "Ton/ta partenaire"}
+          partnerColor={partnerColor}
+        />
+      )}
     </RisoCard>
+  )
+}
+
+/**
+ * Action « Échanger nos couleurs » (§6.5) : les deux couleurs sont bloquées
+ * dès qu'elles sont prises (voir le message ci-dessus), donc sans échange
+ * personne ne peut plus jamais en changer. RPC atomique côté SQL ; ici on ne
+ * fait que confirmer explicitement avant l'appel, avec les prénoms/couleurs
+ * réels (ex. « Sonia devient sauge, tu deviens brique — ok ? »).
+ */
+function SwapColorsAction({
+  myColor,
+  partnerName,
+  partnerColor,
+}: {
+  myColor: Color
+  partnerName: string
+  partnerColor: Color
+}) {
+  const router = useRouter()
+  const [isPending, startTransition] = useTransition()
+  const [confirming, setConfirming] = useState(false)
+  const [error, setError] = useState<string | undefined>()
+
+  function swap() {
+    setError(undefined)
+    startTransition(async () => {
+      const result = await swapColors()
+      if (result.ok) {
+        setConfirming(false)
+        router.refresh()
+      } else {
+        setError(result.error)
+      }
+    })
+  }
+
+  return (
+    <div className="mt-5 border-t-2 border-dashed border-ink/20 pt-4">
+      {!confirming ? (
+        <RisoButton
+          type="button"
+          variant="ghost"
+          className="h-11 w-full text-sm"
+          onClick={() => setConfirming(true)}
+        >
+          Échanger nos couleurs
+        </RisoButton>
+      ) : (
+        <div className="flex flex-col gap-2.5 rounded-[10px] border-2 border-ink bg-paper-light p-3">
+          <p className="text-[13px] leading-snug text-ink">
+            {partnerName} devient {COLOR_META[myColor].label.toLowerCase()},
+            tu deviens {COLOR_META[partnerColor].label.toLowerCase()} — ok ?
+          </p>
+          <div className="flex gap-2">
+            <RisoButton
+              type="button"
+              variant="primary"
+              className="h-11 flex-1 text-sm"
+              disabled={isPending}
+              onClick={swap}
+            >
+              {isPending ? "Échange…" : "Oui, échanger"}
+            </RisoButton>
+            <RisoButton
+              type="button"
+              variant="secondary"
+              className="h-11 flex-1 text-sm"
+              disabled={isPending}
+              onClick={() => setConfirming(false)}
+            >
+              Annuler
+            </RisoButton>
+          </div>
+          {error && (
+            <p role="alert" className="text-[12px] font-medium text-brique">
+              {error}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 

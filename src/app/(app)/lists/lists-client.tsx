@@ -438,9 +438,9 @@ function ListTile({
                 href={`/lists/${list.id}`}
                 className="block min-w-0 flex-1 rounded-[8px] outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
               >
-                <h3 className="font-display text-lg uppercase leading-tight text-ink">
+                <h2 className="font-display text-lg uppercase leading-tight text-ink">
                   {list.name}
-                </h3>
+                </h2>
                 <div className="mt-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                   <span className="font-display text-2xl leading-none text-ink">
                     {list.unchecked}

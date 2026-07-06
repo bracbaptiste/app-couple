@@ -27,9 +27,9 @@ function CategoryHeader({
       )}
       {...props}
     >
-      <h4 className="font-display text-[15px] leading-none uppercase">
+      <h2 className="font-display text-[15px] leading-none uppercase">
         {label}
-      </h4>
+      </h2>
       {count != null && (
         <span className="font-mono text-[11px] font-bold text-sauge">
           {count}

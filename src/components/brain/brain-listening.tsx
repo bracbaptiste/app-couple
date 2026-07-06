@@ -769,7 +769,7 @@ export function BrainListening({ open, onClose, ecran }: Props) {
               maxLength={TEXT_MAX}
               placeholder="Dicte ou écris ta commande…"
               aria-label="Commande à dicter"
-              className="w-full resize-none rounded-[8px] border-2 border-ink bg-paper-light px-3 py-2 text-base text-ink outline-none placeholder:text-ink-soft/60 focus-visible:shadow-riso-sauge"
+              className="w-full resize-none rounded-[8px] border-2 border-ink bg-paper-light px-3 py-2 text-base text-ink outline-none placeholder:text-ink-soft focus-visible:shadow-riso-sauge"
             />
             <div className="flex justify-end gap-2">
               <RisoButton variant="ghost" size="sm" onClick={close}>

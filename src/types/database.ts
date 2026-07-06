@@ -748,9 +748,9 @@ export type Database = {
           p_created_by: string
           p_list_item_ids: string[]
           p_mode: string
-          p_recipe_id: string | null
+          p_recipe_id: string
           p_slot_id: string
-          p_texte: string | null
+          p_texte: string
         }
         Returns: Json
       }
@@ -785,16 +785,17 @@ export type Database = {
         Returns: boolean
       }
       normaliser_nom: { Args: { raw: string }; Returns: string }
+      swap_couple_colors: { Args: never; Returns: Json }
       update_recipe_with_ingredients: {
         Args: {
-          p_calories_par_portion: number | null
-          p_duree_minutes: number | null
+          p_calories_par_portion: number
+          p_duree_minutes: number
           p_etapes: Json
-          p_glucides_g: number | null
+          p_glucides_g: number
           p_ingredients: Json
-          p_lipides_g: number | null
+          p_lipides_g: number
           p_nombre_personnes: number
-          p_proteines_g: number | null
+          p_proteines_g: number
           p_recipe_id: string
           p_tags: string[]
           p_titre: string

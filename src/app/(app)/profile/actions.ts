@@ -99,6 +99,36 @@ export async function updateProfile(
   return { ok: true }
 }
 
+/**
+ * Échange les couleurs d'identité des deux membres du couple (§6.5). Sans ça,
+ * une fois les deux couleurs prises, `updateProfile` bloque tout changement
+ * (l'autre couleur est toujours prise par le/la partenaire). L'échange est
+ * atomique côté SQL (`swap_couple_colors`, un seul UPDATE) ; la confirmation
+ * avant appel est portée par l'UI (Profil).
+ */
+export async function swapColors(): Promise<ActionResult> {
+  const { supabase } = await requireMembership()
+  const { data, error } = await supabase.rpc("swap_couple_colors")
+
+  if (error || !data || typeof data !== "object") {
+    return { ok: false, error: "Échange impossible. Réessaie." }
+  }
+
+  const result = data as { ok?: boolean; code?: string }
+  if (!result.ok) {
+    if (result.code === "NOT_TWO_MEMBERS") {
+      return {
+        ok: false,
+        error: "Ton/ta partenaire doit avoir rejoint l'espace pour échanger les couleurs.",
+      }
+    }
+    return { ok: false, error: "Échange impossible. Réessaie." }
+  }
+
+  revalidatePath("/profile")
+  return { ok: true }
+}
+
 /** Ajoute une catégorie à la fin de la liste (position = max + 1). */
 export async function addCategory(
   _prev: ActionResult | null,

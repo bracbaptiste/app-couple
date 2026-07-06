@@ -104,6 +104,7 @@ export default async function ProfilePage() {
         <IdentitySection
           displayName={profile.display_name}
           color={myColor}
+          partnerName={partner?.display_name ?? null}
           partnerColor={partnerColor}
         />
 

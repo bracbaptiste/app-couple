@@ -303,17 +303,19 @@ export async function updateRecipe(
     ordre: index,
   }))
 
+  // La fonction SQL accepte `null` sur ces champs nutritionnels optionnels ;
+  // les types générés ne l'exposent plus après régénération (§6.5).
   const { error: updErr } = await supabase.rpc("update_recipe_with_ingredients", {
     p_recipe_id: recipeId,
     p_titre: v.titre,
-    p_duree_minutes: v.dureeMinutes,
+    p_duree_minutes: v.dureeMinutes as number,
     p_type_plat: v.typePlat,
     p_tags: v.tags,
     p_nombre_personnes: v.nombrePersonnes,
-    p_calories_par_portion: v.caloriesParPortion,
-    p_proteines_g: v.proteinesG,
-    p_glucides_g: v.glucidesG,
-    p_lipides_g: v.lipidesG,
+    p_calories_par_portion: v.caloriesParPortion as number,
+    p_proteines_g: v.proteinesG as number,
+    p_glucides_g: v.glucidesG as number,
+    p_lipides_g: v.lipidesG as number,
     p_etapes: v.etapes as unknown as Json,
     p_ingredients: ingredients as unknown as Json,
   })

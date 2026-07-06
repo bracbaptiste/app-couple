@@ -196,7 +196,7 @@ export function TaskReviewSheet({
               onChange={(e) => setTitle(e.target.value)}
               maxLength={TITLE_MAX}
               placeholder="Intitulé de la tâche"
-              className="h-12 w-full rounded-[8px] border-2 border-ink bg-paper-light px-3 text-base font-medium text-ink outline-none placeholder:text-ink-soft/60 focus-visible:shadow-riso-sauge"
+              className="h-12 w-full rounded-[8px] border-2 border-ink bg-paper-light px-3 text-base font-medium text-ink outline-none placeholder:text-ink-soft focus-visible:shadow-riso-sauge"
             />
           </div>
 

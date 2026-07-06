@@ -74,7 +74,7 @@ export function DonePanel({
         aria-expanded={open}
         className="flex items-center justify-between gap-3 rounded-[6px] bg-ink px-3 py-1.5 text-paper outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px"
       >
-        <h4 className="font-display text-[15px] uppercase leading-none">Fait</h4>
+        <h2 className="font-display text-[15px] uppercase leading-none">Fait</h2>
         <span className="flex items-center gap-2">
           <span className="font-mono text-[11px] font-bold text-sauge">
             ×{tasks.length} ✓

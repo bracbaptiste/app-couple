@@ -248,7 +248,7 @@ export function VoiceAddTask({
                     maxLength={TEXT_MAX}
                     placeholder="Dicte ou écris ta tâche…"
                     aria-label="Phrase à transformer en tâche"
-                    className="w-full resize-none rounded-[8px] border-2 border-ink bg-paper-light px-3 py-2 text-base text-ink outline-none placeholder:text-ink-soft/60 focus-visible:shadow-riso-sauge"
+                    className="w-full resize-none rounded-[8px] border-2 border-ink bg-paper-light px-3 py-2 text-base text-ink outline-none placeholder:text-ink-soft focus-visible:shadow-riso-sauge"
                   />
                   <div className="flex justify-end gap-2">
                     <RisoButton variant="ghost" size="sm" onClick={close}>

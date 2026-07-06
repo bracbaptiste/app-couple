@@ -41,8 +41,9 @@ export function OfflineIndicator() {
   const wasOnline = useRef(true)
 
   // Rafraîchit le compteur « en attente » à intervalle léger tant qu'il y a des
-  // mutations en file ou qu'on est hors ligne (le badge reste juste après un
-  // ajout offline). Peu coûteux : une lecture IndexedDB locale.
+  // mutations en file, qu'on est hors ligne, ou qu'une synchro est en cours/en
+  // erreur (le badge reste juste après un ajout offline). En ligne + file vide
+  // + idle : un simple relevé ponctuel, aucun intervalle actif (discrétion réelle).
   useEffect(() => {
     let alive = true
     const tick = async () => {
@@ -50,11 +51,16 @@ export function OfflineIndicator() {
       if (alive) setPending(n)
     }
     void tick()
+
+    const needsPolling = !online || pending > 0 || sync.phase !== "idle"
+    if (!needsPolling) return
+
     const id = window.setInterval(tick, 2000)
     return () => {
       alive = false
       window.clearInterval(id)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [online, sync])
 
   const flush = useCallback(async () => {
@@ -132,8 +138,15 @@ export function OfflineIndicator() {
           />
           <span>
             {sync.failed} modif. non synchronisée
-            {sync.failed > 1 ? "s" : ""} — réessaie plus tard
+            {sync.failed > 1 ? "s" : ""}
           </span>
+          <button
+            type="button"
+            onClick={() => void flush()}
+            className="flex min-h-11 items-center rounded-[4px] px-2 font-mono text-[11px] font-bold uppercase text-ink underline decoration-2 underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ink focus-visible:ring-offset-1"
+          >
+            Réessayer
+          </button>
         </>
       )}
     </div>

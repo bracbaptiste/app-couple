@@ -309,9 +309,9 @@ export function ListDetail({
           {checked.length > 0 && (
             <section className="flex flex-col gap-2 opacity-80">
               <div className="flex items-center justify-between gap-3 rounded-[6px] border-2 border-dashed border-ink px-3 py-1.5">
-                <h4 className="font-display text-[13px] uppercase leading-none text-ink-soft">
+                <h2 className="font-display text-[13px] uppercase leading-none text-ink-soft">
                   Déjà pris
-                </h4>
+                </h2>
                 <span className="font-mono text-[11px] font-bold text-ink-soft">
                   ×{checked.length}
                 </span>
@@ -665,7 +665,7 @@ function DetailsPanel({
           onChange={(e) => setNote(e.target.value)}
           placeholder="Ex : marque préférée"
           maxLength={200}
-          className="h-11 w-full rounded-[8px] border-2 border-ink bg-paper-light px-3 text-base text-ink outline-none placeholder:text-ink-soft/60 focus-visible:shadow-riso-sauge"
+          className="h-11 w-full rounded-[8px] border-2 border-ink bg-paper-light px-3 text-base text-ink outline-none placeholder:text-ink-soft focus-visible:shadow-riso-sauge"
         />
       </div>
       <div className="flex gap-1.5">

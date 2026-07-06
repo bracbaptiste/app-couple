@@ -1035,8 +1035,10 @@ export async function confirmMealRemoval(
     p_slot_id: slotId,
     p_list_item_ids: listItemIds.filter((id): id is string => typeof id === "string"),
     p_mode: mode.kind,
-    p_recipe_id: recipeId,
-    p_texte: texte,
+    // La fonction SQL accepte `null` (mode "remove" ne fixe ni l'un ni l'autre) ;
+    // les types générés ne l'exposent plus après régénération (§6.5).
+    p_recipe_id: recipeId as string,
+    p_texte: texte as string,
     p_created_by: userId,
   })
 
