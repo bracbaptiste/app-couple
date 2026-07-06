@@ -2,13 +2,25 @@
 
 import Link from "next/link"
 import { Dialog } from "@base-ui/react/dialog"
-import { Check, Minus, Plus, ShoppingCart, Sparkles } from "lucide-react"
+import {
+  Check,
+  Minus,
+  Plus,
+  RotateCcw,
+  ShoppingCart,
+  Sparkles,
+  Trash2,
+} from "lucide-react"
 import { useEffect, useRef, useState, useTransition } from "react"
 
 import { RisoButton, risoButtonVariants } from "@/components/ui/riso-button"
 import { useSwipeDismiss } from "@/lib/hooks/useSwipeDismiss"
+import { useSwipeReveal } from "@/lib/hooks/useSwipeReveal"
 import { formatQuantites } from "@/lib/recipes/format"
 import { cn } from "@/lib/utils"
+
+/** Largeur révélée au swipe pour l'action « Retirer » (idiom app, cf. list-items). */
+const SWIPE_REVEAL = 96
 
 import {
   commitWeekList,
@@ -176,8 +188,20 @@ function GenerateContent({
     initialPersonnes && initialPersonnes > 0 ? Math.round(initialPersonnes) : 2,
   ) // défaut 2 (§8.5.2)
   const [apercu, setApercu] = useState<GenerationApercu | null>(null)
+  // Articles RETIRÉS au récap (§8.5.5) d'un swipe : clés normalisées écartées de
+  // l'écriture. Réinitialisé à chaque nouveau récapitulatif.
+  const [excluded, setExcluded] = useState<Set<string>>(new Set())
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState<string | undefined>()
+
+  function toggleExclude(cle: string, retire: boolean) {
+    setExcluded((prev) => {
+      const next = new Set(prev)
+      if (retire) next.add(cle)
+      else next.delete(cle)
+      return next
+    })
+  }
 
   // Vocal (§8.7) : liste pré-résolue + auto-preview → on saute la configuration et
   // on lance directement le récapitulatif niveau 2 (rien d'écrit avant validation).
@@ -213,6 +237,7 @@ function GenerateContent({
       const res = await previewWeekList(listId, personnes, weekStartKey)
       if (res.ok) {
         setApercu(res.apercu)
+        setExcluded(new Set()) // nouveau récap → aucun retrait en cours
         setStep("apercu")
       } else {
         setError(res.error)
@@ -226,7 +251,14 @@ function GenerateContent({
       // Vocal (§8.7) : on transmet la phrase dictée → la génération est journalisée
       // (§7). En tactile, `brainTexteDicte` est absent → aucune ligne de ticket.
       const brain = brainTexteDicte ? { texteDicte: brainTexteDicte } : undefined
-      const res = await commitWeekList(listId, personnes, weekStartKey, brain)
+      // Les articles retirés au swipe (§8.5.5) sont écartés de l'écriture.
+      const res = await commitWeekList(
+        listId,
+        personnes,
+        weekStartKey,
+        brain,
+        [...excluded],
+      )
       if (res.ok) {
         setApercu(res.apercu)
         setStep("succes")
@@ -253,6 +285,8 @@ function GenerateContent({
       {step === "apercu" && apercu && (
         <ApercuStep
           apercu={apercu}
+          excluded={excluded}
+          onToggleExclude={toggleExclude}
           pending={pending}
           onBack={() => setStep("config")}
           onValider={valider}
@@ -404,16 +438,23 @@ const RAISON_LABEL: Record<"texte" | "sans_ingredient" | "deja_genere", string> 
 
 function ApercuStep({
   apercu,
+  excluded,
+  onToggleExclude,
   pending,
   onBack,
   onValider,
 }: {
   apercu: GenerationApercu
+  /** Clés retirées au swipe : écartées de l'écriture (§8.5.5). */
+  excluded: Set<string>
+  onToggleExclude: (cle: string, retire: boolean) => void
   pending: boolean
   onBack: () => void
   onValider: () => void
 }) {
   const { creees, fusionnees, ignores, aEcrire } = apercu
+  // Ce qui sera réellement écrit = total moins les articles retirés au swipe.
+  const restants = aEcrire - excluded.size
 
   return (
     <>
@@ -433,10 +474,21 @@ function ApercuStep({
           </p>
         )}
 
+        {aEcrire > 0 && (
+          <p className="font-mono text-[10px] uppercase tracking-wide text-ink-soft">
+            Glisse un article vers la gauche pour le retirer.
+          </p>
+        )}
+
         {creees.length > 0 && (
           <RecapSection titre={`Nouveaux articles (${creees.length})`}>
             {creees.map((l, i) => (
-              <RecapLigne key={`c-${l.nom}-${i}`} ligne={l} />
+              <RecapLigne
+                key={`c-${l.cle}-${i}`}
+                ligne={l}
+                retire={excluded.has(l.cle)}
+                onToggleExclude={onToggleExclude}
+              />
             ))}
           </RecapSection>
         )}
@@ -444,7 +496,13 @@ function ApercuStep({
         {fusionnees.length > 0 && (
           <RecapSection titre={`Fusionnés à des articles déjà présents (${fusionnees.length})`}>
             {fusionnees.map((l, i) => (
-              <RecapLigne key={`f-${l.nom}-${i}`} ligne={l} fusion />
+              <RecapLigne
+                key={`f-${l.cle}-${i}`}
+                ligne={l}
+                fusion
+                retire={excluded.has(l.cle)}
+                onToggleExclude={onToggleExclude}
+              />
             ))}
           </RecapSection>
         )}
@@ -476,15 +534,15 @@ function ApercuStep({
       <div className="flex shrink-0 flex-col gap-2">
         <RisoButton
           onClick={onValider}
-          disabled={pending || aEcrire === 0}
+          disabled={pending || restants === 0}
           className="h-12 w-full text-sm"
         >
           <ShoppingCart className="size-4" strokeWidth={2.5} aria-hidden />
           {pending
             ? "Écriture…"
-            : aEcrire === 0
+            : restants === 0
               ? "Rien à ajouter"
-              : `Valider et ajouter (${aEcrire})`}
+              : `Valider et ajouter (${restants})`}
         </RisoButton>
         <RisoButton variant="ghost" onClick={onBack} disabled={pending} className="h-10 w-full text-[11px]">
           Retour
@@ -510,32 +568,128 @@ function RecapSection({ titre, children }: { titre: string; children: React.Reac
  * Une ligne de récap : produit + quantité résultante, et le détail transparent
  * de ce que chaque repas apporte (§6 « jamais de fusion silencieuse »). Pour une
  * fusion dans une ligne existante, on montre l'état initial → final.
+ *
+ * RETIRABLE au swipe (§8.5.5) : glisser vers la gauche découvre l'action « Retirer »
+ * (geste mutualisé {@link useSwipeReveal}, comme les articles de liste) ; l'article
+ * est alors écarté de l'écriture, réversible via « Rétablir ». Rien n'est écrit tant
+ * que « Valider » n'est pas pressé (§6).
  */
-function RecapLigne({ ligne, fusion }: { ligne: GenerationLigneView; fusion?: boolean }) {
+function RecapLigne({
+  ligne,
+  fusion,
+  retire,
+  onToggleExclude,
+}: {
+  ligne: GenerationLigneView
+  fusion?: boolean
+  retire: boolean
+  onToggleExclude: (cle: string, retire: boolean) => void
+}) {
+  const {
+    offset,
+    setOffset,
+    dragging,
+    didDragRef,
+    close: closeSwipe,
+    swipeHandlers,
+  } = useSwipeReveal({ revealWidth: SWIPE_REVEAL, enabled: !retire })
+
+  // Retiré : rangée atténuée + barrée, non swipable, avec un « Rétablir ».
+  if (retire) {
+    return (
+      <div className="flex items-center justify-between gap-2 rounded-[8px] border-2 border-dashed border-ink/30 bg-paper-light/50 px-3 py-2">
+        <span className="min-w-0 truncate text-[14px] font-medium text-ink-soft line-through">
+          {ligne.nom}
+        </span>
+        <button
+          type="button"
+          onClick={() => onToggleExclude(ligne.cle, false)}
+          className="inline-flex shrink-0 items-center gap-1 rounded-[6px] px-1.5 py-1 font-mono text-[11px] font-bold uppercase tracking-wide text-ink-soft outline-none focus-visible:ring-2 focus-visible:ring-ink"
+        >
+          <RotateCcw className="size-3.5" strokeWidth={2.5} aria-hidden />
+          Rétablir
+        </button>
+      </div>
+    )
+  }
+
   const initial =
     fusion && ligne.quantitesInitiales.length > 0
       ? formatQuantites(ligne.quantitesInitiales)
       : null
 
   return (
-    <div className="flex flex-col gap-1 rounded-[8px] border-2 border-ink bg-paper-light px-3 py-2">
-      <div className="flex items-baseline justify-between gap-3">
-        <span className="min-w-0 text-[14px] font-medium text-ink">{ligne.nom}</span>
-        <span className="shrink-0 font-mono text-[12px] text-ink">
-          {initial && <span className="text-ink-soft">{initial} → </span>}
-          {formatQuantites(ligne.quantitesFinales)}
-        </span>
+    <div className="relative overflow-hidden rounded-[8px]">
+      {/* Calque d'action « Retirer », révélé au glissement (et au focus clavier). */}
+      <div
+        className={cn(
+          "absolute inset-y-0 right-0 z-0 flex overflow-hidden rounded-r-[8px] border-y-2 border-r-2 border-ink transition-opacity duration-200 motion-reduce:transition-none",
+          offset === 0 && !dragging ? "opacity-0" : "opacity-100",
+        )}
+        onFocus={() => setOffset(-SWIPE_REVEAL)}
+        onBlur={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) closeSwipe()
+        }}
+      >
+        <button
+          type="button"
+          aria-label={`Retirer ${ligne.nom} du récapitulatif`}
+          onClick={() => {
+            closeSwipe()
+            onToggleExclude(ligne.cle, true)
+          }}
+          className="inline-flex w-24 items-center justify-center gap-1 bg-brique font-mono text-[11px] font-bold uppercase tracking-wide text-paper-light outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-paper-light"
+        >
+          <Trash2 className="size-4" strokeWidth={2.5} aria-hidden />
+          Retirer
+        </button>
       </div>
-      <ul className="flex flex-col gap-0.5 border-t border-ink/15 pt-1">
-        {ligne.detail.map((d, i) => (
-          <li key={i} className="flex items-baseline justify-between gap-2 text-[11px] text-ink-soft">
-            <span className="min-w-0 truncate">
-              <span className="font-mono uppercase">{d.jour}</span> · {d.repas}
-            </span>
-            <span className="shrink-0 font-mono">{d.texte}</span>
-          </li>
-        ))}
-      </ul>
+
+      {/* Carte au premier plan : glisse via translateX. `touch-pan-y` réserve le
+          scroll vertical au navigateur et l'horizontale au geste. */}
+      <div
+        className={cn(
+          "relative z-10 flex touch-pan-y select-none flex-col gap-1 rounded-[8px] border-2 border-ink bg-paper-light px-3 py-2",
+          (offset !== 0 || dragging) && "rounded-r-none",
+          dragging
+            ? ""
+            : "transition-transform duration-200 ease-out motion-reduce:transition-none",
+        )}
+        style={{ transform: `translateX(${offset}px)` }}
+        {...swipeHandlers}
+        onClickCapture={(e) => {
+          // Fin de glissement : on avale le click. Ligne ouverte : on referme.
+          if (didDragRef.current) {
+            e.preventDefault()
+            e.stopPropagation()
+            didDragRef.current = false
+            return
+          }
+          if (offset !== 0) {
+            e.preventDefault()
+            e.stopPropagation()
+            closeSwipe()
+          }
+        }}
+      >
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="min-w-0 text-[14px] font-medium text-ink">{ligne.nom}</span>
+          <span className="shrink-0 font-mono text-[12px] text-ink">
+            {initial && <span className="text-ink-soft">{initial} → </span>}
+            {formatQuantites(ligne.quantitesFinales)}
+          </span>
+        </div>
+        <ul className="flex flex-col gap-0.5 border-t border-ink/15 pt-1">
+          {ligne.detail.map((d, i) => (
+            <li key={i} className="flex items-baseline justify-between gap-2 text-[11px] text-ink-soft">
+              <span className="min-w-0 truncate">
+                <span className="font-mono uppercase">{d.jour}</span> · {d.repas}
+              </span>
+              <span className="shrink-0 font-mono">{d.texte}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   )
 }

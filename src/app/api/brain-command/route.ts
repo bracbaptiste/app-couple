@@ -19,6 +19,7 @@ import {
   toDateKey,
 } from "@/lib/planning/week"
 import { createClient } from "@/lib/supabase/server"
+import { consumeAiRateLimit } from "@/lib/ai/rate-limit"
 
 /**
  * LA FONDATION du pilotage vocal V4 — le routeur d'intentions (PRD_V4 §5).
@@ -97,6 +98,9 @@ export async function POST(request: Request) {
   // Biais « ajout de tâche » (§0.5, migration V2.1) : le mic de la to-do envoie
   // `mode: "task"` pour ancrer l'interprétation sur les intents `taches.*`.
   const hint = o.mode === "task" ? ("task" as const) : null
+
+  const rate = await consumeAiRateLimit(supabase, "brain-command", 20)
+  if (!rate.ok) return erreur(rate.error, rate.status)
 
   // Date du jour résolue côté serveur (fuseau Europe/Paris) : les dates relatives
   //    (« demain », « jeudi »…) sont calées dessus (§5.4.6). On en dérive aussi la

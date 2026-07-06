@@ -269,13 +269,7 @@ async function trouverOuCreerArticle(
   const existing = matches?.[0]
   if (existing) {
     if (compterUsage) {
-      await supabase
-        .from("library_items")
-        .update({
-          usage_count: existing.usage_count + 1,
-          last_used_at: new Date().toISOString(),
-        })
-        .eq("id", existing.id)
+      await supabase.rpc("increment_library_usage", { p_item_id: existing.id })
     }
     return { id: existing.id, created: false }
   }
@@ -298,6 +292,53 @@ async function trouverOuCreerArticle(
     .single()
 
   return created ? { id: created.id, created: true } : null
+}
+
+type AddOrMergeListItemResult = {
+  listItemId: string
+  createdListItem: boolean
+  previousQuantities: QuantiteBase[]
+  quantities: QuantiteBase[]
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+function parseAddOrMergeListItem(raw: Json | null): AddOrMergeListItemResult | null {
+  const o = asRecord(raw)
+  if (!o || typeof o.list_item_id !== "string") return null
+  return {
+    listItemId: o.list_item_id,
+    createdListItem: o.created_list_item === true,
+    previousQuantities: parseQuantites(o.previous_quantities),
+    quantities: parseQuantites(o.quantities),
+  }
+}
+
+async function addOrMergeListItem(
+  supabase: ServerClient,
+  userId: string,
+  listId: string,
+  nomAffiche: string,
+  cle: string,
+  quantite: number | null,
+  unite: Unite | null,
+): Promise<AddOrMergeListItemResult | null> {
+  const { data, error } = await supabase.rpc("add_or_merge_list_item", {
+    p_list_id: listId,
+    p_name: nomAffiche,
+    p_nom_normalise: cle,
+    p_category_name: guessCategory(nomAffiche),
+    p_added_by: userId,
+    p_additions: [{ quantite, unite }] as unknown as Json,
+    p_count_usage: true,
+  })
+
+  if (error) return null
+  return parseAddOrMergeListItem(data)
 }
 
 /* ------------------------------------------------------------- exécution */
@@ -354,69 +395,36 @@ export async function executeBrainActions(
           const cle = normaliserNom(nom) // jamais la clé venue du client
           if (!cle) continue
 
-          const lib = await trouverOuCreerArticle(
+          const unite: Unite | null = art.unite
+          const merged = await addOrMergeListItem(
             supabase,
-            coupleId,
+            userId,
+            listId,
             nom,
             cle,
-            true,
+            art.quantite,
+            unite,
           )
-          if (!lib) {
-            return { ok: false, error: "Impossible d'ajouter un article. Réessaie." }
+          if (!merged) {
+            return { ok: false, error: "Impossible d'ajouter à la liste. Réessaie." }
           }
 
-          // Ligne ACTIVE (non cochée) existante pour ce produit → on fusionne
-          // dedans (jamais dans une ligne déjà cochée, qui appartient au passé).
-          const { data: existant } = await supabase
-            .from("list_items")
-            .select("id, quantities")
-            .eq("list_id", listId)
-            .eq("library_item_id", lib.id)
-            .eq("is_checked", false)
-            .maybeSingle()
+          const { operation } = fusionnerQuantite(merged.previousQuantities, {
+            quantite: art.quantite,
+            unite,
+          })
 
-          const unite: Unite | null = art.unite
-          const { quantites, operation } = fusionnerQuantite(
-            parseQuantites(existant?.quantities),
-            { quantite: art.quantite, unite },
-          )
-
-          if (existant) {
-            const avant = parseQuantites(existant.quantities)
-            const { error } = await supabase
-              .from("list_items")
-              .update({ quantities: quantites })
-              .eq("id", existant.id)
-              .eq("list_id", listId)
-            if (error) {
-              return {
-                ok: false,
-                error: "Impossible de mettre à jour la liste. Réessaie.",
-              }
-            }
+          if (!merged.createdListItem) {
             // Annulation : restaurer les quantités d'avant fusion.
             ops.push({
               kind: "restore_quantities",
               listId,
-              itemId: existant.id,
-              quantities: avant,
+              itemId: merged.listItemId,
+              quantities: merged.previousQuantities,
             })
           } else {
-            const { data: inserted, error } = await supabase
-              .from("list_items")
-              .insert({
-                list_id: listId,
-                library_item_id: lib.id,
-                added_by: userId,
-                quantities: quantites,
-              })
-              .select("id")
-              .single()
-            if (error || !inserted) {
-              return { ok: false, error: "Impossible d'ajouter à la liste. Réessaie." }
-            }
             // Annulation : retirer la ligne créée.
-            ops.push({ kind: "delete_list_item", listId, itemId: inserted.id })
+            ops.push({ kind: "delete_list_item", listId, itemId: merged.listItemId })
           }
 
           // « au goût » est un terme de recette : pour une liste de courses, un
@@ -427,7 +435,7 @@ export async function executeBrainActions(
             detail:
               operation.kind === "au_gout"
                 ? "ajouté"
-                : decrireFusion(operation, quantites),
+                : decrireFusion(operation, merged.quantities),
           }
           recap.push(ligne)
           lignes.push(ligne)
@@ -709,6 +717,10 @@ type UndoTargets = {
   planning: boolean
 }
 
+function undoFailure(): never {
+  throw new Error("Annulation impossible")
+}
+
 /**
  * Rejoue un lot d'{@link UndoOp} sous RLS : chaque geste est l'inverse exact de
  * l'exécution. Garde-fou DELETE (mémoire projet) : jamais de suppression sans
@@ -732,30 +744,32 @@ async function replayUndoOps(
     switch (op.kind) {
       case "delete_list_item": {
         // Ne retirer que si la liste appartient au couple (double la RLS).
-        if (!(await assertCoursesList(supabase, op.listId, coupleId))) break
-        await supabase
+        if (!(await assertCoursesList(supabase, op.listId, coupleId))) undoFailure()
+        const { error } = await supabase
           .from("list_items")
           .delete()
           .eq("id", op.itemId)
           .eq("list_id", op.listId)
+        if (error) undoFailure()
         listesTouchees.add(op.listId)
         break
       }
       case "restore_quantities": {
-        if (!(await assertCoursesList(supabase, op.listId, coupleId))) break
-        await supabase
+        if (!(await assertCoursesList(supabase, op.listId, coupleId))) undoFailure()
+        const { error } = await supabase
           .from("list_items")
           .update({ quantities: op.quantities })
           .eq("id", op.itemId)
           .eq("list_id", op.listId)
+        if (error) undoFailure()
         listesTouchees.add(op.listId)
         break
       }
       case "uncheck_list_item":
       case "recheck_list_item": {
-        if (!(await assertCoursesList(supabase, op.listId, coupleId))) break
+        if (!(await assertCoursesList(supabase, op.listId, coupleId))) undoFailure()
         const checked = op.kind === "recheck_list_item"
-        await supabase
+        const { error } = await supabase
           .from("list_items")
           .update({
             is_checked: checked,
@@ -763,15 +777,16 @@ async function replayUndoOps(
           })
           .eq("id", op.itemId)
           .eq("list_id", op.listId)
+        if (error) undoFailure()
         listesTouchees.add(op.listId)
         break
       }
       case "uncheck_task":
       case "recheck_task": {
         // Ne toucher que si la to-do appartient au couple (double la RLS).
-        if (!(await assertTodoList(supabase, op.listId, coupleId))) break
+        if (!(await assertTodoList(supabase, op.listId, coupleId))) undoFailure()
         const done = op.kind === "recheck_task"
-        await supabase
+        const { error } = await supabase
           .from("tasks")
           .update({
             is_done: done,
@@ -780,6 +795,7 @@ async function replayUndoOps(
           })
           .eq("id", op.taskId)
           .eq("list_id", op.listId)
+        if (error) undoFailure()
         todosTouchees.add(op.listId)
         break
       }
@@ -787,16 +803,18 @@ async function replayUndoOps(
         // Garde-fou cascade : ne supprimer que si plus AUCUN list_item ne
         // référence cet article (sinon on laisse tel quel — annulation partielle
         // sûre plutôt qu'une suppression en cascade).
-        const { count } = await supabase
+        const { count, error: countErr } = await supabase
           .from("list_items")
           .select("id", { count: "exact", head: true })
           .eq("library_item_id", op.itemId)
+        if (countErr) undoFailure()
         if ((count ?? 0) === 0) {
-          await supabase
+          const { error } = await supabase
             .from("library_items")
             .delete()
             .eq("id", op.itemId)
             .eq("couple_id", coupleId)
+          if (error) undoFailure()
           biblioTouchee = true
         }
         break
@@ -804,11 +822,12 @@ async function replayUndoOps(
       case "delete_meal_slot": {
         // Case vidée (§8.7). DELETE filtré par id ET couple_id (garde-fou global :
         // jamais de suppression sans filtre couple/id sur une table multi-couples).
-        await supabase
+        const { error } = await supabase
           .from("meal_slots")
           .delete()
           .eq("id", op.slotId)
           .eq("couple_id", coupleId)
+        if (error) undoFailure()
         planningTouche = true
         break
       }
@@ -841,7 +860,12 @@ export async function undoBrainActions(undo: BrainUndo): Promise<UndoResult> {
     return { ok: false, error: "Rien à annuler." }
   }
   const { supabase, coupleId } = await requireMembership()
-  const targets = await replayUndoOps(supabase, coupleId, undo.ops)
+  let targets: UndoTargets
+  try {
+    targets = await replayUndoOps(supabase, coupleId, undo.ops)
+  } catch {
+    return { ok: false, error: "Annulation impossible. Réessaie." }
+  }
   revalidateUndoTargets(targets)
   return { ok: true }
 }

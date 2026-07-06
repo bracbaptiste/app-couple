@@ -18,6 +18,7 @@ import {
   weekDays,
 } from "@/lib/planning/week"
 import { createClient } from "@/lib/supabase/server"
+import { consumeAiRateLimit } from "@/lib/ai/rate-limit"
 
 /**
  * Route de la PROPOSITION IA DE SEMAINE (PRD_V4 §8.4, Phase 6).
@@ -89,6 +90,9 @@ export async function POST(request: Request) {
   const days = weekDays(monday)
   const mondayKey = toDateKey(days[0])
   const sundayKey = toDateKey(addDays(monday, 6))
+
+  const rate = await consumeAiRateLimit(supabase, "planning-propose-week", 6)
+  if (!rate.ok) return erreur(rate.error, rate.status)
 
   // 4. Contexte relu sous RLS : recettes du carnet + repas déjà placés (pour en
   //    déduire les cases LIBRES que l'IA a le droit de remplir).

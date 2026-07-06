@@ -6,6 +6,7 @@ import {
   ExtractionParseError,
 } from "@/lib/recipes/extraction"
 import { createClient } from "@/lib/supabase/server"
+import { consumeAiRateLimit } from "@/lib/ai/rate-limit"
 
 /**
  * Route d'extraction de recette (PRD_recettes §7.2).
@@ -89,6 +90,9 @@ export async function POST(request: Request) {
       return erreur("Une image est trop volumineuse (max 8 Mo).", 413)
     }
   }
+
+  const rate = await consumeAiRateLimit(supabase, "recipes-extract", 4)
+  if (!rate.ok) return erreur(rate.error, rate.status)
 
   // Bloc image par photo (base64), dans l'ordre reçu.
   const imageBlocks = await Promise.all(

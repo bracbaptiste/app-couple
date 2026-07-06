@@ -9,6 +9,7 @@ import {
   type TodoListContext,
 } from "@/lib/tasks/voice-parsing"
 import { createClient } from "@/lib/supabase/server"
+import { consumeAiRateLimit } from "@/lib/ai/rate-limit"
 
 /**
  * Route de la commande vocale → tâche structurée (PRD-taches-v2.1 §3.2, §5).
@@ -69,6 +70,9 @@ export async function POST(request: Request) {
   const o = (body ?? {}) as Record<string, unknown>
   const text = typeof o.text === "string" ? o.text.trim().slice(0, TEXTE_MAX) : ""
   if (!text) return erreur("Aucun texte à analyser.", 400)
+
+  const rate = await consumeAiRateLimit(supabase, "parse-task", 20)
+  if (!rate.ok) return erreur(rate.error, rate.status)
 
   // 4. Contexte relu CÔTÉ SERVEUR sous RLS (jamais fourni par le client) :
   //    - listes to-do accessibles (la RLS de `lists` filtre déjà couple +

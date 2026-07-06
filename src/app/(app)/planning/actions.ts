@@ -240,69 +240,6 @@ export async function togglePlanningTask(
 /*  Génération de la liste de courses de la semaine (§8.5)                      */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Helpers de bibliothèque — JUMEAUX de ceux de `recipes/actions.ts` (find-or-
- * create par clé §5). Répliqués ici volontairement pour NE PAS refondre la
- * Phase 2 en même temps (« pas de grosse refonte d'un coup », PRD §0.3). La vraie
- * logique métier (ajustement §8.2, fusion §6) est, elle, IMPORTÉE — pas copiée
- * (`@/lib/planning/generation` + `@/lib/recipes/fusion`). Candidat à une
- * extraction partagée ultérieure.
- */
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, (m) => `\\${m}`)
-}
-
-async function resolveCategoryId(
-  supabase: ServerClient,
-  coupleId: string,
-  categoryName: string,
-): Promise<string | null> {
-  const { data } = await supabase
-    .from("categories")
-    .select("id")
-    .eq("couple_id", coupleId)
-    .ilike("name", escapeLike(categoryName))
-    .maybeSingle()
-  return data?.id ?? null
-}
-
-/** Crée un article de bibliothèque (clé §5 fournie par l'app). Renvoie son id. */
-async function creerArticle(
-  supabase: ServerClient,
-  coupleId: string,
-  nomAffiche: string,
-  cle: string,
-): Promise<string | null> {
-  const categoryId = await resolveCategoryId(
-    supabase,
-    coupleId,
-    guessCategory(nomAffiche),
-  )
-  const { data } = await supabase
-    .from("library_items")
-    .insert({
-      couple_id: coupleId,
-      name: nomAffiche,
-      nom_normalise: cle, // règle d'or §5 : clé canonique JS, jamais celle de l'IA
-      category_id: categoryId,
-    })
-    .select("id")
-    .single()
-  return data?.id ?? null
-}
-
-/** Renforce la fréquence d'usage d'un article (tri de la Bibliothèque). */
-async function bumpUsage(
-  supabase: ServerClient,
-  id: string,
-  usageCount: number,
-): Promise<void> {
-  await supabase
-    .from("library_items")
-    .update({ usage_count: usageCount + 1, last_used_at: new Date().toISOString() })
-    .eq("id", id)
-}
-
 /** Libellé « jour + créneau » d'une case (« lun. midi », « mar. soir »). */
 const CRENEAU_JOUR: Record<Creneau, string> = { dejeuner: "midi", diner: "soir" }
 const weekdayFmt = new Intl.DateTimeFormat("fr-FR", { weekday: "short" })
@@ -322,6 +259,8 @@ function entierPositif(v: unknown, repli: number): number {
 
 /** Une ligne du récapitulatif de génération (créée ou fusionnée). */
 export type GenerationLigneView = {
+  /** Clé normalisée (§5) — identifie la ligne pour le retrait au récap (§8.5.5). */
+  cle: string
   nom: string
   quantitesInitiales: QuantiteBase[]
   quantitesFinales: QuantiteBase[]
@@ -363,6 +302,41 @@ export type CommitWeekListResult =
  * phrase dictée est journalisée telle quelle.
  */
 export type BrainGenerationOrigin = { texteDicte: string }
+
+type WeekCommitRow = {
+  key: string
+  createdListItem: boolean
+  previousQuantities: QuantiteBase[]
+  quantities: QuantiteBase[]
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+function parseWeekCommitRows(raw: Json | null): WeekCommitRow[] {
+  if (!Array.isArray(raw)) return []
+  const rows: WeekCommitRow[] = []
+  for (const item of raw) {
+    const o = asRecord(item)
+    if (!o || typeof o.key !== "string") continue
+    rows.push({
+      key: o.key,
+      createdListItem: o.created_list_item === true,
+      previousQuantities: parseQuantites(o.previous_quantities),
+      quantities: parseQuantites(o.quantities),
+    })
+  }
+  return rows
+}
+
+function parseTouchedListIds(raw: Json | null): string[] {
+  const o = asRecord(raw)
+  const ids = o?.touched_list_ids
+  return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : []
+}
 
 /* --- Rassemblement des besoins (LECTURE SEULE, partagé preview/commit) ----- */
 
@@ -598,6 +572,7 @@ async function rassemblerBesoins(
 /** Projette une ligne repliée vers sa vue client (récap transparent §6). */
 function ligneView(l: LigneGeneree): GenerationLigneView {
   return {
+    cle: l.cle,
     nom: l.nom,
     quantitesInitiales: l.quantitesInitiales,
     quantitesFinales: l.quantitesFinales,
@@ -665,6 +640,14 @@ export async function commitWeekList(
   weekStartKey: string,
   /** Présent si la génération est déclenchée par le Cerveau (§8.7) → journalisée (§7). */
   brain?: BrainGenerationOrigin,
+  /**
+   * Articles RETIRÉS au récapitulatif (§8.5.5) : clés normalisées (§5) que
+   * l'utilisateur a écartées d'un swipe avant validation. On les saute purement
+   * et simplement à l'écriture — aucun article, aucune ligne, aucune provenance.
+   * Recalculé serveur (jamais le récap du client, §2.12) : la clé est comparée à
+   * `besoin.cle`, seul un besoin réel peut donc être exclu.
+   */
+  excludedCles?: string[],
 ): Promise<CommitWeekListResult> {
   const { supabase, userId, coupleId } = await requireMembership()
 
@@ -672,74 +655,61 @@ export async function commitWeekList(
   if (!r.ok) return r
   const data = r.data
 
+  const exclus = new Set(
+    Array.isArray(excludedCles)
+      ? excludedCles.filter((c): c is string => typeof c === "string")
+      : [],
+  )
+
   const creees: GenerationLigneView[] = []
   const fusionnees: GenerationLigneView[] = []
+  const lignesACommit: {
+    besoin: BesoinRassemble["besoin"]
+    payload: Record<string, unknown>
+  }[] = []
 
   for (const b of data.besoins) {
-    const ligne = foldBesoin(b.besoin, b.existantes, b.lignePreexistante)
+    // Article retiré au récap : on ne l'écrit pas (ni ligne, ni provenance).
+    if (exclus.has(b.besoin.cle)) continue
+    lignesACommit.push({
+      besoin: b.besoin,
+      payload: {
+        key: b.besoin.cle,
+        name: b.besoin.nom,
+        category: guessCategory(b.besoin.nom),
+        additions: b.besoin.contributions.map((c) => ({
+          quantite: c.quantite,
+          unite: c.unite,
+        })),
+        meal_slot_ids: [...new Set(b.besoin.contributions.map((c) => c.mealSlotId))],
+      },
+    })
+  }
 
-    // 1. Article de bibliothèque : créé si le rassemblement n'en a trouvé aucun.
-    let libraryItemId = b.libraryItemId
-    if (libraryItemId === null) {
-      libraryItemId = await creerArticle(supabase, coupleId, b.besoin.nom, b.besoin.cle)
-      if (!libraryItemId) {
-        return { ok: false, error: "Impossible de créer un article. Réessaie." }
-      }
-    } else {
-      await bumpUsage(supabase, libraryItemId, b.usageCount ?? 0)
+  if (lignesACommit.length > 0) {
+    const { data: committed, error } = await supabase.rpc("commit_week_list_lines", {
+      p_list_id: listId,
+      p_added_by: userId,
+      p_lines: lignesACommit.map((l) => l.payload) as unknown as Json,
+    })
+
+    if (error) {
+      return { ok: false, error: "Impossible de générer la liste. Réessaie." }
     }
 
-    // 2. Ligne de liste : update de l'active existante, sinon insert.
-    let listItemId = b.listItemId
-    if (listItemId) {
-      const { error } = await supabase
-        .from("list_items")
-        .update({ quantities: ligne.quantitesFinales })
-        .eq("id", listItemId)
-        .eq("list_id", listId)
-      if (error) {
-        return { ok: false, error: "Impossible de mettre à jour la liste. Réessaie." }
+    const rowsByKey = new Map(parseWeekCommitRows(committed).map((row) => [row.key, row]))
+    for (const item of lignesACommit) {
+      const row = rowsByKey.get(item.besoin.cle)
+      if (!row) {
+        return { ok: false, error: "La génération est incomplète. Réessaie." }
       }
-    } else {
-      const { data: inserted, error } = await supabase
-        .from("list_items")
-        .insert({
-          list_id: listId,
-          library_item_id: libraryItemId,
-          added_by: userId,
-          quantities: ligne.quantitesFinales,
-        })
-        .select("id")
-        .single()
-      if (error || !inserted) {
-        return { ok: false, error: "Impossible d’ajouter à la liste. Réessaie." }
-      }
-      listItemId = inserted.id
-    }
 
-    // 3. Provenance (§8.5.6) : un lien par repas contributeur (dédupliqué).
-    const origine = ligne.statut === "cree" ? "generation" : "fusion"
-    const mealSlotIds = [...new Set(ligne.etapes.map((e) => e.contribution.mealSlotId))]
-    const rows = mealSlotIds.map((meal_slot_id) => ({
-      meal_slot_id,
-      list_item_id: listItemId as string,
-      origine,
-    }))
-    if (rows.length) {
-      const { error } = await supabase
-        .from("meal_slot_sources")
-        .upsert(rows, {
-          onConflict: "meal_slot_id,list_item_id",
-          ignoreDuplicates: true,
-        })
-      if (error) {
-        return { ok: false, error: "Impossible d’enregistrer la provenance. Réessaie." }
-      }
+      const ligne = foldBesoin(item.besoin, row.previousQuantities, !row.createdListItem)
+      const view = ligneView(ligne)
+      view.quantitesFinales = row.quantities
+      if (row.createdListItem) creees.push(view)
+      else fusionnees.push(view)
     }
-
-    const view = ligneView(ligne)
-    if (ligne.statut === "cree") creees.push(view)
-    else fusionnees.push(view)
   }
 
   revalidatePath(`/lists/${listId}`)
@@ -1037,63 +1007,34 @@ export async function confirmMealRemoval(
   listItemIds: string[],
   mode: MealRemovalMode,
 ): Promise<ActionResult> {
-  const { supabase, coupleId } = await requireMembership()
+  const { supabase, userId } = await requireMembership()
 
-  const rassemble = await rassemblerArticlesRepas(supabase, coupleId, slotId)
-  if (!rassemble) return { ok: false, error: "Repas introuvable." }
+  let recipeId: string | null = null
+  let texte: string | null = null
 
-  // Ensemble RÉELLEMENT retirable, recalculé serveur (jamais confiance au client).
-  const retirablesById = new Map(
-    rassemble.articles
-      .filter(
-        (a) => categoriserRetrait(a.origine, a.checked, a.sourceCount) === "retirable",
-      )
-      .map((a) => [a.listItemId, a]),
-  )
-  const demandes = new Set(listItemIds)
-  const aRetirer = [...retirablesById.values()].filter((a) => demandes.has(a.listItemId))
-
-  // 1. Retrait ciblé (DELETE par id ; RLS + provenance couple-scoped en amont).
-  const listesTouchees = new Set<string>()
-  if (aRetirer.length) {
-    for (const a of aRetirer) listesTouchees.add(a.listId)
-    const { error } = await supabase
-      .from("list_items")
-      .delete()
-      .in(
-        "id",
-        aRetirer.map((a) => a.listItemId),
-      )
-    if (error) {
-      return { ok: false, error: "Impossible de retirer les articles. Réessaie." }
+  if (mode.kind === "replace") {
+    if (mode.source.kind === "recette") {
+      recipeId = mode.source.recipeId
+    } else {
+      texte = mode.source.texte.trim().slice(0, TEXTE_MAX)
+      if (!texte) return { ok: false, error: "Entre le repas (ex. « restes »)." }
     }
   }
 
-  // 2. Vider ou remplacer la case.
-  if (mode.kind === "clear") {
-    const res = await clearMeal(slotId)
-    if (!res.ok) return res
-  } else {
-    // La provenance de l'ancien repas ne vaut plus rien (même case, autre contenu).
-    const { error: srcErr } = await supabase
-      .from("meal_slot_sources")
-      .delete()
-      .eq("meal_slot_id", slotId)
-    if (srcErr) {
-      return { ok: false, error: "Impossible de nettoyer la provenance. Réessaie." }
-    }
-    const { data: slot } = await supabase
-      .from("meal_slots")
-      .select("date, creneau")
-      .eq("id", slotId)
-      .eq("couple_id", coupleId)
-      .maybeSingle()
-    if (!slot) return { ok: false, error: "Repas introuvable." }
-    const res = await placeMeal(slot.date, slot.creneau, mode.source)
-    if (!res.ok) return res
+  const { data, error } = await supabase.rpc("confirm_meal_removal", {
+    p_slot_id: slotId,
+    p_list_item_ids: listItemIds.filter((id): id is string => typeof id === "string"),
+    p_mode: mode.kind,
+    p_recipe_id: recipeId,
+    p_texte: texte,
+    p_created_by: userId,
+  })
+
+  if (error) {
+    return { ok: false, error: "Impossible d’appliquer ce changement. Réessaie." }
   }
 
   revalidatePath("/planning")
-  for (const listId of listesTouchees) revalidatePath(`/lists/${listId}`)
+  for (const listId of parseTouchedListIds(data)) revalidatePath(`/lists/${listId}`)
   return { ok: true }
 }

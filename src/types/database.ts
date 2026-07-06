@@ -14,6 +14,44 @@ export type Database = {
   }
   public: {
     Tables: {
+      ai_route_limits: {
+        Row: {
+          count: number
+          created_at: string
+          id: string
+          route: string
+          updated_at: string
+          user_id: string
+          window_start: string
+        }
+        Insert: {
+          count?: number
+          created_at?: string
+          id?: string
+          route: string
+          updated_at?: string
+          user_id: string
+          window_start: string
+        }
+        Update: {
+          count?: number
+          created_at?: string
+          id?: string
+          route?: string
+          updated_at?: string
+          user_id?: string
+          window_start?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_route_limits_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       brain_commands: {
         Row: {
           actions: Json
@@ -670,6 +708,37 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      add_or_merge_list_item: {
+        Args: {
+          p_added_by: string
+          p_additions: Json
+          p_category_name: string
+          p_count_usage?: boolean
+          p_list_id: string
+          p_name: string
+          p_nom_normalise: string
+        }
+        Returns: Json
+      }
+      check_ai_rate_limit: {
+        Args: { p_limit?: number; p_route: string; p_window_seconds?: number }
+        Returns: Json
+      }
+      commit_week_list_lines: {
+        Args: { p_added_by: string; p_lines: Json; p_list_id: string }
+        Returns: Json
+      }
+      confirm_meal_removal: {
+        Args: {
+          p_created_by: string
+          p_list_item_ids: string[]
+          p_mode: string
+          p_recipe_id: string | null
+          p_slot_id: string
+          p_texte: string | null
+        }
+        Returns: Json
+      }
       create_couple: {
         Args: { p_color: string; p_display_name: string }
         Returns: Json
@@ -696,7 +765,28 @@ export type Database = {
         Args: { p_category_id: string; p_direction: string }
         Returns: boolean
       }
+      merge_quantities: {
+        Args: { p_additions: Json; p_existing: Json }
+        Returns: Json
+      }
       normaliser_nom: { Args: { raw: string }; Returns: string }
+      update_recipe_with_ingredients: {
+        Args: {
+          p_calories_par_portion: number | null
+          p_duree_minutes: number | null
+          p_etapes: Json
+          p_glucides_g: number | null
+          p_ingredients: Json
+          p_lipides_g: number | null
+          p_nombre_personnes: number
+          p_proteines_g: number | null
+          p_recipe_id: string
+          p_tags: string[]
+          p_titre: string
+          p_type_plat: string
+        }
+        Returns: undefined
+      }
     }
     Enums: {
       [_ in never]: never

@@ -9,6 +9,7 @@ import {
   type RecetteASerialiser,
 } from "@/lib/recipes/generation"
 import { createClient } from "@/lib/supabase/server"
+import { consumeAiRateLimit } from "@/lib/ai/rate-limit"
 
 /**
  * Route du mode « Créer / Améliorer » (PRD_recettes §9).
@@ -119,6 +120,9 @@ export async function POST(request: Request) {
         : [],
     }
   }
+
+  const rate = await consumeAiRateLimit(supabase, "recipes-generate", 6)
+  if (!rate.ok) return erreur(rate.error, rate.status)
 
   // 5. Appel Claude Opus 4.8 (§3) : cadre culinaire §9.2 en système, demande/
   //    recette en message utilisateur.

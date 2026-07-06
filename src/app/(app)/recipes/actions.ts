@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
 
 import { createClient } from "@/lib/supabase/server"
+import { type Json } from "@/types/database"
 import { normaliserNom } from "@/lib/utils/normalize-name-key"
 import { guessCategory } from "@/lib/utils/guess-category"
 import {
@@ -267,13 +268,9 @@ export async function createRecipe(
  *   2. validation défensive partagée ({@link validerRecette}, §10) ;
  *   3. garde-fou : la recette doit appartenir au couple courant (on borne le
  *      `recipeId` reçu par `id` + `couple_id`, en plus de la RLS) ;
- *   4. UPDATE des champs de la recette (borné `id` + `couple_id`). On NE touche
- *      ni à `source` ni à `notes` : ce sont des données que la fiche d'édition ne
- *      gère pas, on les préserve ;
- *   5. remplacement du bloc d'ingrédients. supabase-js n'a pas de transaction
- *      multi-lignes : on insère les NOUVEAUX d'abord (clé §5 recalculée serveur),
- *      PUIS on supprime les anciens par leur `id` (garde-fou DELETE). Cet ordre
- *      garantit qu'à aucun instant la recette ne se retrouve sans ingrédients.
+ *   4. UPDATE des champs + remplacement du bloc d'ingrédients dans une RPC
+ *      transactionnelle. On NE touche ni à `source` ni à `notes` : ce sont des
+ *      données que la fiche d'édition ne gère pas, on les préserve.
  */
 export async function updateRecipe(
   recipeId: string,
@@ -295,72 +292,31 @@ export async function updateRecipe(
     .maybeSingle()
   if (!existing) return { ok: false, error: "Recette introuvable." }
 
-  // --- 4. UPDATE des champs (source & notes préservés) -------------------
-  const { error: updErr } = await supabase
-    .from("recipes")
-    .update({
-      titre: v.titre,
-      duree_minutes: v.dureeMinutes,
-      type_plat: v.typePlat,
-      tags: v.tags,
-      nombre_personnes: v.nombrePersonnes,
-      calories_par_portion: v.caloriesParPortion,
-      proteines_g: v.proteinesG,
-      glucides_g: v.glucidesG,
-      lipides_g: v.lipidesG,
-      etapes: v.etapes,
-    })
-    .eq("id", recipeId)
-    .eq("couple_id", coupleId)
+  const ingredients = v.ingredients.map((ing, index) => ({
+    nom: ing.nom,
+    nom_normalise: normaliserNom(ing.nom), // règle d'or §5
+    quantite: ing.quantite,
+    unite: ing.unite,
+    ordre: index,
+  }))
+
+  const { error: updErr } = await supabase.rpc("update_recipe_with_ingredients", {
+    p_recipe_id: recipeId,
+    p_titre: v.titre,
+    p_duree_minutes: v.dureeMinutes,
+    p_type_plat: v.typePlat,
+    p_tags: v.tags,
+    p_nombre_personnes: v.nombrePersonnes,
+    p_calories_par_portion: v.caloriesParPortion,
+    p_proteines_g: v.proteinesG,
+    p_glucides_g: v.glucidesG,
+    p_lipides_g: v.lipidesG,
+    p_etapes: v.etapes as unknown as Json,
+    p_ingredients: ingredients as unknown as Json,
+  })
 
   if (updErr) {
     return { ok: false, error: "Impossible d’enregistrer la recette. Réessaie." }
-  }
-
-  // --- 5. Remplacement du bloc d'ingrédients (insert nouveaux → delete anciens)
-  const { data: anciens } = await supabase
-    .from("recipe_ingredients")
-    .select("id")
-    .eq("recipe_id", recipeId)
-
-  if (v.ingredients.length > 0) {
-    const rows = v.ingredients.map((ing, index) => ({
-      recipe_id: recipeId,
-      nom_affiche: ing.nom,
-      nom_normalise: normaliserNom(ing.nom), // règle d'or §5
-      quantite: ing.quantite,
-      unite: ing.unite,
-      ordre: index,
-    }))
-
-    const { error: insErr } = await supabase
-      .from("recipe_ingredients")
-      .insert(rows)
-    if (insErr) {
-      // Les anciens sont intacts : la recette reste cohérente. On échoue net.
-      return {
-        ok: false,
-        error: "Impossible d’enregistrer les ingrédients. Réessaie.",
-      }
-    }
-  }
-
-  // Suppression des anciennes lignes, bornée par leurs `id` (garde-fou DELETE).
-  const anciensIds = (anciens ?? []).map((a) => a.id)
-  if (anciensIds.length > 0) {
-    const { error: delErr } = await supabase
-      .from("recipe_ingredients")
-      .delete()
-      .in("id", anciensIds)
-    if (delErr) {
-      // Les nouveaux ingrédients sont déjà en place : on signale l'incohérence
-      // transitoire (doublons) plutôt que de la masquer.
-      return {
-        ok: false,
-        error:
-          "Recette mise à jour, mais le nettoyage des anciens ingrédients a échoué. Réessaie.",
-      }
-    }
   }
 
   revalidatePath("/recipes")
@@ -443,56 +399,47 @@ async function resolveCategoryId(
   return data?.id ?? null
 }
 
-/**
- * Find-or-create d'un article de la bibliothèque PAR CLÉ normalisée (§6).
- * Même mécanisme que `addItemToList`, mais le rapprochement se fait sur
- * `nom_normalise` (la clé §5) et non sur le nom affiché. L'index est non unique
- * (quasi-doublons possibles) : on prend l'article le plus utilisé.
- */
-async function trouverOuCreerArticle(
+type AddOrMergeListItemResult = {
+  previousQuantities: QuantiteBase[]
+  quantities: QuantiteBase[]
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+function parseAddOrMergeListItem(raw: Json | null): AddOrMergeListItemResult | null {
+  const o = asRecord(raw)
+  if (!o || typeof o.list_item_id !== "string") return null
+  return {
+    previousQuantities: parseQuantites(o.previous_quantities),
+    quantities: parseQuantites(o.quantities),
+  }
+}
+
+async function addOrMergeListItem(
   supabase: ServerClient,
-  coupleId: string,
+  userId: string,
+  listId: string,
   nomAffiche: string,
   cle: string,
-): Promise<string | null> {
-  const { data: matches } = await supabase
-    .from("library_items")
-    .select("id, usage_count")
-    .eq("couple_id", coupleId)
-    .eq("nom_normalise", cle)
-    .order("usage_count", { ascending: false })
-    .limit(1)
+  quantite: number | null,
+  unite: Unite | null,
+): Promise<AddOrMergeListItemResult | null> {
+  const { data, error } = await supabase.rpc("add_or_merge_list_item", {
+    p_list_id: listId,
+    p_name: nomAffiche,
+    p_nom_normalise: cle,
+    p_category_name: guessCategory(nomAffiche),
+    p_added_by: userId,
+    p_additions: [{ quantite, unite }] as unknown as Json,
+    p_count_usage: true,
+  })
 
-  const existing = matches?.[0]
-  if (existing) {
-    await supabase
-      .from("library_items")
-      .update({
-        usage_count: existing.usage_count + 1,
-        last_used_at: new Date().toISOString(),
-      })
-      .eq("id", existing.id)
-    return existing.id
-  }
-
-  const categoryId = await resolveCategoryId(
-    supabase,
-    coupleId,
-    guessCategory(nomAffiche),
-  )
-
-  const { data: created } = await supabase
-    .from("library_items")
-    .insert({
-      couple_id: coupleId,
-      name: nomAffiche,
-      nom_normalise: cle, // règle d'or §5 : clé fournie par l'app (JS canonique)
-      category_id: categoryId,
-    })
-    .select("id")
-    .single()
-
-  return created?.id ?? null
+  if (error) return null
+  return parseAddOrMergeListItem(data)
 }
 
 /** Une ligne du récap de fusion renvoyée au client (§8.1). */
@@ -598,23 +545,7 @@ export async function addRecipeIngredientsToList(
     const cle = normaliserNom(nom) // règle d'or §5 : jamais la clé stockée
     if (!cle) continue
 
-    // 3. Article de bibliothèque (find-or-create par clé).
-    const libraryItemId = await trouverOuCreerArticle(supabase, coupleId, nom, cle)
-    if (!libraryItemId) {
-      return { ok: false, error: "Impossible d’ajouter un ingrédient. Réessaie." }
-    }
-
-    // 4. Ligne active de la liste pour ce produit (on ne fusionne pas dans une
-    //    ligne déjà cochée : elle appartient au passé, cf. addItemToList).
-    const { data: existant } = await supabase
-      .from("list_items")
-      .select("id, quantities")
-      .eq("list_id", listId)
-      .eq("library_item_id", libraryItemId)
-      .eq("is_checked", false)
-      .maybeSingle()
-
-    // 5. Fusion des quantités (§6). L'unité stockée est bornée à g/ml/piece/null
+    // 3. Fusion des quantités (§6). L'unité stockée est bornée à g/ml/piece/null
     //    (l'extraction convertit déjà kg/l en amont) ; on la re-borne par sûreté.
     const unite: Unite | null = (UNITES as readonly string[]).includes(
       ing.unite as string,
@@ -626,35 +557,26 @@ export async function addRecipeIngredientsToList(
     // reste exact (pas d'arrondi) ; seul l'affichage de la fiche arrondit.
     const quantiteAjustee =
       ing.quantite === null ? null : ing.quantite * ratio
-    const { quantites, operation } = fusionnerQuantite(
-      parseQuantites(existant?.quantities),
-      { quantite: quantiteAjustee, unite },
-    )
 
-    // 6. Écriture : update si la ligne existe, sinon insert.
-    if (existant) {
-      const { error } = await supabase
-        .from("list_items")
-        .update({ quantities: quantites })
-        .eq("id", existant.id)
-        .eq("list_id", listId)
-      if (error) {
-        return { ok: false, error: "Impossible de mettre à jour la liste. Réessaie." }
-      }
-    } else {
-      const { error } = await supabase.from("list_items").insert({
-        list_id: listId,
-        library_item_id: libraryItemId,
-        added_by: userId,
-        quantities: quantites,
-      })
-      if (error) {
-        return { ok: false, error: "Impossible d’ajouter à la liste. Réessaie." }
-      }
+    const merged = await addOrMergeListItem(
+      supabase,
+      userId,
+      listId,
+      nom,
+      cle,
+      quantiteAjustee,
+      unite,
+    )
+    if (!merged) {
+      return { ok: false, error: "Impossible d’ajouter à la liste. Réessaie." }
     }
 
-    // 7. Récap transparent.
-    recap.push({ nom, operation, quantites })
+    // 4. Récap transparent, calculé depuis l'état réellement lu/verrouillé en base.
+    const { operation } = fusionnerQuantite(merged.previousQuantities, {
+      quantite: quantiteAjustee,
+      unite,
+    })
+    recap.push({ nom, operation, quantites: merged.quantities })
   }
 
   revalidatePath(`/lists/${listId}`)

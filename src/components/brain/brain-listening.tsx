@@ -512,10 +512,22 @@ export function BrainListening({ open, onClose, ecran }: Props) {
     if (!journalId && !undo) return
     setUndoing(true)
     try {
-      if (journalId) await undoBrainCommand(journalId)
-      else if (undo) await undoBrainActions(undo)
+      const res = journalId
+        ? await undoBrainCommand(journalId)
+        : undo
+          ? await undoBrainActions(undo)
+          : null
+      if (res && !res.ok) {
+        setMessage(res.error)
+        setStep("error")
+        setUndoing(false)
+        return
+      }
     } catch {
-      // Échec d'annulation : on ferme quand même (rattrapable depuis le ticket).
+      setMessage("Annulation impossible. Réessaie depuis le ticket.")
+      setStep("error")
+      setUndoing(false)
+      return
     }
     close()
   }

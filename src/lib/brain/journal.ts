@@ -20,11 +20,11 @@ import {
  * (il ne trace QUE les commandes du Cerveau). L'ÉCRITURE d'une ligne se fait à
  * l'exécution (cf. `executeBrainActions` dans `./execute.ts`) ; ce module porte :
  *   - {@link fetchBrainJournal} : les 100 dernières commandes du couple (§7) ;
- *   - {@link undoBrainCommand} : l'annulation journalisée (§6) — rejoue les
- *     {@link UndoOp}, puis raye la ligne (`statut` `fait` → `annule`, §7).
+ *   - {@link undoBrainCommand} : l'annulation journalisée (§6) — réserve la ligne,
+ *     rejoue les {@link UndoOp}, puis la raye (`statut` `fait` → `annule`, §7).
  *
  * Sécurité : tout passe par la RLS couple de `brain_commands`. L'annulation est
- * un CLAIM atomique (`update … where statut = 'fait'`) : deux annulations
+ * un CLAIM atomique (`annule_at` posé pendant le rejeu) : deux annulations
  * concurrentes (les deux membres, ou toast + ticket) ne rejouent jamais deux fois
  * les mêmes gestes.
  */
@@ -148,8 +148,12 @@ export async function fetchBrainJournal(): Promise<JournalTicket[]> {
       groups: parseGroups(row.actions),
       statut,
       annuleAt: row.annule_at,
-      // Annulable = encore « fait » ET un bloc d'annulation présent (§12 Phase 3).
-      annulable: statut === "fait" && extractUndoOps(row.undo_data).length > 0,
+      // Annulable = encore « fait », pas déjà réservée par une annulation en cours,
+      // ET un bloc d'annulation présent (§12 Phase 3).
+      annulable:
+        statut === "fait" &&
+        !row.annule_at &&
+        extractUndoOps(row.undo_data).length > 0,
     }
   })
 }
@@ -195,32 +199,58 @@ export async function undoBrainCommand(
   if (!journalId) return { ok: false, error: "Commande introuvable." }
   const { supabase, userId, coupleId } = await requireCouple()
 
-  const { data: claimed } = await supabase
+  const { data: claimed, error: claimErr } = await supabase
     .from("brain_commands")
     .update({
-      statut: "annule",
       annule_at: new Date().toISOString(),
       annule_by: userId,
     })
     .eq("id", journalId)
     .eq("couple_id", coupleId)
     .eq("statut", "fait")
+    .is("annule_at", null)
     .not("undo_data", "is", null)
     .select("undo_data")
     .maybeSingle()
 
+  if (claimErr) {
+    return { ok: false, error: "Annulation impossible. Réessaie." }
+  }
+
   if (!claimed) {
-    // Déjà annulée, non réversible, ou introuvable sous RLS.
+    // Déjà annulée/en cours, non réversible, ou introuvable sous RLS.
     return { ok: false, error: "Cette commande a déjà été annulée." }
   }
 
-  // La ligne est « claimée » (rayée) : on rejoue maintenant les gestes inverses
-  // via la Server Action existante (replay sous RLS + revalidation des écrans
-  // listes / to-do / bibliothèque touchés).
+  // La ligne est réservée mais pas encore rayée : on ne passe à `annule` qu'après
+  // un rejeu réussi.
   const ops = extractUndoOps(claimed.undo_data)
   if (ops.length > 0) {
-    await undoBrainActions({ ops })
+    const undone = await undoBrainActions({ ops })
+    if (!undone.ok) {
+      await supabase
+        .from("brain_commands")
+        .update({ annule_at: null, annule_by: null })
+        .eq("id", journalId)
+        .eq("couple_id", coupleId)
+        .eq("statut", "fait")
+        .eq("annule_by", userId)
+      return undone
+    }
   }
+
+  const { error: doneErr } = await supabase
+    .from("brain_commands")
+    .update({ statut: "annule" })
+    .eq("id", journalId)
+    .eq("couple_id", coupleId)
+    .eq("statut", "fait")
+    .eq("annule_by", userId)
+
+  if (doneErr) {
+    return { ok: false, error: "Annulation appliquée, mais le ticket n'a pas pu être rayé." }
+  }
+
   revalidatePath("/profile/journal")
   return { ok: true }
 }
