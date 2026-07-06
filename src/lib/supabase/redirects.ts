@@ -5,12 +5,6 @@ import type { Database } from "@/types/database"
 /** Pages publiques d'authentification (accessibles sans session). */
 export const AUTH_PATHS = ["/login", "/signup", "/forgot-password"] as const
 
-/**
- * Pages temporaires de développement, accessibles sans session.
- * À retirer en même temps que `/design-test` et la home de setup.
- */
-export const DEV_PUBLIC_PATHS = ["/design-test"] as const
-
 /** Flux techniques publics qui ne doivent pas rediriger une session active. */
 export const FLOW_PUBLIC_PATHS = ["/auth/callback", "/reset-password"] as const
 
@@ -25,14 +19,13 @@ export function isAuthPath(pathname: string): boolean {
   return AUTH_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))
 }
 
-/** `true` si le chemin est public (auth + pages de dev temporaires). */
+/** `true` si le chemin est public (auth + flux techniques). */
 export function isPublicPath(pathname: string): boolean {
   return (
     isAuthPath(pathname) ||
     FLOW_PUBLIC_PATHS.some(
       (p) => pathname === p || pathname.startsWith(`${p}/`),
-    ) ||
-    DEV_PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))
+    )
   )
 }
 
