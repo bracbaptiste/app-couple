@@ -300,6 +300,27 @@
 }
 
 /*
+  Toast « Supprimé · ANNULER » partagé (PRD_V4.1 §4.5) — légère montée + fondu à
+  l'apparition, même esprit que le toast ANNULER du Cerveau. Décoratif : sous
+  mouvement réduit, le toast apparaît directement, sans glissement.
+*/
+@media (prefers-reduced-motion: no-preference) {
+  .undo-toast-in {
+    animation: undo-toast-in 220ms ease-out both;
+  }
+}
+@keyframes undo-toast-in {
+  0% {
+    transform: translateY(12px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/*
   Journal du Cerveau — « ticket de caisse » (§7).
 
   Bord perforé : le fond papier du rouleau est masqué par deux séries d'encoches

@@ -12,6 +12,7 @@ import { SectionMarker } from "@/components/lists/SectionMarker"
 import { ListLogo } from "@/components/shared/ListLogo"
 import { GhostTile } from "@/components/shared/ghost-tile"
 import { NewListSheet } from "@/components/lists/NewListSheet"
+import { UndoToast } from "@/components/shared/undo-toast"
 import { useRealtimeLists } from "@/lib/realtime"
 import { useOfflineCache } from "@/lib/offline/use-offline-cache"
 import { useSwipeReveal } from "@/lib/hooks/useSwipeReveal"
@@ -20,6 +21,7 @@ import { cn } from "@/lib/utils"
 import {
   deleteList,
   renameList,
+  restoreList,
   type ActionResult,
 } from "./actions"
 
@@ -88,8 +90,29 @@ export function ListsManager({
   // client, pour rester SSR-safe.
   const hintListId = todoLists[0]?.id ?? coursesLists[0]?.id ?? null
 
+  // Toast « Supprimé · ANNULER » (PRD_V4.1 §4.5) : un seul à la fois pour ce
+  // hub, une nouvelle suppression remplace l'ancien.
+  const [undo, setUndo] = useState<{
+    key: number
+    restore: () => Promise<ActionResult>
+  } | null>(null)
+  const undoKeyRef = useRef(0)
+
+  function handleListDeleted(listId: string) {
+    undoKeyRef.current += 1
+    setUndo({ key: undoKeyRef.current, restore: () => restoreList(listId) })
+  }
+
   return (
     <div className="flex flex-col gap-5">
+      {undo && (
+        <UndoToast
+          key={undo.key}
+          onUndo={undo.restore}
+          onDismiss={() => setUndo(null)}
+        />
+      )}
+
       <div className="flex flex-col gap-3">
         <h1 className="font-display text-xl uppercase text-ink">Listes</h1>
       </div>
@@ -112,13 +135,19 @@ export function ListsManager({
           {/* Regroupement par type (PRD_V2 §3.1) : to-do en premier, courses
               ensuite. Le tampon de section n'apparaît que si son groupe existe. */}
           {todoLists.length > 0 && (
-            <ListGroup kind="todo" lists={todoLists} hintListId={hintListId} />
+            <ListGroup
+              kind="todo"
+              lists={todoLists}
+              hintListId={hintListId}
+              onDeleted={handleListDeleted}
+            />
           )}
           {coursesLists.length > 0 && (
             <ListGroup
               kind="courses"
               lists={coursesLists}
               hintListId={hintListId}
+              onDeleted={handleListDeleted}
             />
           )}
         </>
@@ -136,11 +165,14 @@ function ListGroup({
   kind,
   lists,
   hintListId,
+  onDeleted,
 }: {
   kind: "courses" | "todo"
   lists: ListView[]
   /** Id de la tuile qui joue l'indice de swipe (ou null). */
   hintListId: string | null
+  /** Suppression confirmée : le parent décide s'il propose le toast ANNULER. */
+  onDeleted: (listId: string) => void
 }) {
   return (
     <div className="flex flex-col gap-5">
@@ -152,6 +184,7 @@ function ListGroup({
             list={list}
             shadow={index % 2 === 0 ? "sauge" : "brique"}
             hint={list.id === hintListId}
+            onDeleted={onDeleted}
           />
         ))}
       </ul>
@@ -174,11 +207,14 @@ function ListTile({
   list,
   shadow,
   hint,
+  onDeleted,
 }: {
   list: ListView
   shadow: TileShadow
   /** Joue une fois l'indice de swipe (peek) au montage. */
   hint: boolean
+  /** Suppression confirmée : le parent décide s'il propose le toast ANNULER. */
+  onDeleted: (listId: string) => void
 }) {
   const [isPending, startTransition] = useTransition()
   const [mode, setMode] = useState<TileMode>(null)
@@ -452,6 +488,7 @@ function ListTile({
         list={list}
         open={deleting}
         onOpenChange={setDeleting}
+        onDeleted={onDeleted}
       />
     </li>
   )
@@ -468,16 +505,20 @@ function ListTile({
  * « Annuler » reçoit le focus initial et fait office de bouton par défaut, afin
  * d'éviter les suppressions par erreur de clic ; « Supprimer » (variante brique)
  * lance réellement l'action `deleteList`. À la réussite, la liste disparaît via
- * revalidatePath + temps réel, donc on referme simplement le Dialog.
+ * revalidatePath + temps réel ; on referme le Dialog et on prévient le parent,
+ * qui propose le toast ANNULER (PRD_V4.1 §4.5).
  */
 function DeleteListDialog({
   list,
   open,
   onOpenChange,
+  onDeleted,
 }: {
   list: ListView
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** Suppression réussie : le parent décide s'il propose le toast ANNULER. */
+  onDeleted: (listId: string) => void
 }) {
   const [isPending, startTransition] = useTransition()
   const [error, setError] = useState<string | undefined>()
@@ -487,8 +528,12 @@ function DeleteListDialog({
     setError(undefined)
     startTransition(async () => {
       const result = await deleteList(list.id)
-      if (!result.ok) setError(result.error)
-      else onOpenChange(false)
+      if (!result.ok) {
+        setError(result.error)
+        return
+      }
+      onOpenChange(false)
+      onDeleted(list.id)
     })
   }
 
@@ -519,7 +564,7 @@ function DeleteListDialog({
             {list.total > 0
               ? ` et ses ${list.total} article${list.total > 1 ? "s" : ""}`
               : ""}
-            &nbsp;? Cette action est définitive.
+            &nbsp;?
           </Dialog.Description>
 
           {error && (

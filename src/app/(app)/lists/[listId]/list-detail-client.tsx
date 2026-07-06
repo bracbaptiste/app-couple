@@ -8,16 +8,18 @@ import { AddedByMarker } from "@/components/ui/added-by-marker"
 import { CategoryHeader } from "@/components/ui/category-header"
 import { RisoButton } from "@/components/ui/riso-button"
 import { RisoCheckbox } from "@/components/ui/riso-checkbox"
+import { UndoToast } from "@/components/shared/undo-toast"
 import { cn } from "@/lib/utils"
 import { useRealtimeListItems } from "@/lib/realtime"
 import { runMutation } from "@/lib/offline/mutation-queue"
 import { useOfflineCache } from "@/lib/offline/use-offline-cache"
 import { useOfflineOptimistic } from "@/lib/offline/use-offline-optimistic"
+import { useOnlineStatus } from "@/lib/offline/use-online-status"
 import { useSwipeReveal } from "@/lib/hooks/useSwipeReveal"
 import { formatQuantites } from "@/lib/recipes/format"
 import { type QuantiteBase } from "@/lib/recipes/fusion"
 
-import { type ActionResult } from "./actions"
+import { restoreItem, type ActionResult } from "./actions"
 
 type Color = "sauge" | "brique"
 
@@ -140,6 +142,28 @@ export function ListDetail({
   } = useOfflineOptimistic(items, applyOptimisticAction)
   const [actionError, setActionError] = useState<string | undefined>()
 
+  // Toast « Supprimé · ANNULER » (PRD_V4.1 §4.5) : un seul à la fois pour cet
+  // écran, une nouvelle suppression remplace l'ancien (clé incrémentée pour
+  // relancer le délai même si on supprime deux fois de suite).
+  const [undo, setUndo] = useState<{
+    key: number
+    restore: () => Promise<ActionResult>
+  } | null>(null)
+  const undoKeyRef = useRef(0)
+  const online = useOnlineStatus()
+
+  // `deleteItem` passe par la file hors ligne (runMutation) : hors ligne, le
+  // succès est optimiste et RIEN n'a encore été supprimé côté serveur — annuler
+  // n'aurait rien à restaurer. On ne propose donc le toast qu'en ligne.
+  function handleItemDeleted(itemId: string) {
+    if (!online) return
+    undoKeyRef.current += 1
+    setUndo({
+      key: undoKeyRef.current,
+      restore: () => restoreItem(listId, itemId),
+    })
+  }
+
   function handleToggle(itemId: string, next: boolean) {
     setActionError(undefined)
     const action: OptimisticAction = {
@@ -230,6 +254,14 @@ export function ListDetail({
 
   return (
     <div className="flex flex-col gap-5">
+      {undo && (
+        <UndoToast
+          key={undo.key}
+          onUndo={undo.restore}
+          onDismiss={() => setUndo(null)}
+        />
+      )}
+
       {actionError && (
         <p
           role="alert"
@@ -258,6 +290,7 @@ export function ListDetail({
                     item={item}
                     member={item.addedBy ? membersById.get(item.addedBy) ?? null : null}
                     onToggle={handleToggle}
+                    onDeleted={handleItemDeleted}
                     toggling={isPending}
                     printing={printing.has(item.id)}
                   />
@@ -291,6 +324,7 @@ export function ListDetail({
                     item={item}
                     member={item.addedBy ? membersById.get(item.addedBy) ?? null : null}
                     onToggle={handleToggle}
+                    onDeleted={handleItemDeleted}
                     toggling={isPending}
                     printing={printing.has(item.id)}
                   />
@@ -331,6 +365,7 @@ function ItemRow({
   item,
   member,
   onToggle,
+  onDeleted,
   toggling,
   printing = false,
 }: {
@@ -339,6 +374,8 @@ function ItemRow({
   member: MemberView | null
   /** Demande le (dé)cochage au parent, qui gère l'état optimiste partagé. */
   onToggle: (itemId: string, next: boolean) => void
+  /** Suppression confirmée : le parent décide s'il propose le toast ANNULER. */
+  onDeleted: (itemId: string) => void
   /** Une transition (cochage) est en cours dans la liste. */
   toggling: boolean
   /** La ligne vient d'apparaître : elle « s'imprime » (§4.4). */
@@ -552,7 +589,10 @@ function ItemRow({
               size="sm"
               disabled={isPending}
               onClick={() =>
-                run(() => runMutation("deleteItem", { listId, itemId: item.id }))
+                run(
+                  () => runMutation("deleteItem", { listId, itemId: item.id }),
+                  () => onDeleted(item.id),
+                )
               }
             >
               Confirmer

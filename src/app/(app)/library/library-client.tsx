@@ -2,11 +2,13 @@
 
 import { Dialog } from "@base-ui/react/dialog"
 import { Search, Plus, Pencil, Trash2, Check, X } from "lucide-react"
-import { useMemo, useRef, useState, useTransition } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react"
 
 import { CategoryHeader } from "@/components/ui/category-header"
 import { RisoButton } from "@/components/ui/riso-button"
+import { RisoCard } from "@/components/ui/riso-card"
 import { RisoCheckbox } from "@/components/ui/riso-checkbox"
+import { UndoToast } from "@/components/shared/undo-toast"
 import { cn } from "@/lib/utils"
 import { useRealtimeLibrary } from "@/lib/realtime"
 import { useOfflineCache } from "@/lib/offline/use-offline-cache"
@@ -16,6 +18,7 @@ import { FormFeedback } from "@/app/(auth)/form-ui"
 import {
   addLibraryItem,
   deleteLibraryItem,
+  restoreLibraryItem,
   updateLibraryItem,
   sendManyToList,
   type ActionResult,
@@ -73,6 +76,9 @@ const FREQUENCY_LABEL: Record<Frequency, string> = {
 /** Largeur révélée par le swipe : deux cibles tactiles de 64px (≥ 44px requis). */
 const SWIPE_REVEAL = 128
 
+/** Clé localStorage de l'encart pédagogique (PRD_V4.1 §5) : posé au premier affichage, jamais réaffiché. */
+const LIBRARY_COACH_SEEN_KEY = "library-coach-seen"
+
 /** Normalise un libellé pour la recherche (insensible casse + accents). */
 function normalize(value: string): string {
   return value
@@ -116,11 +122,58 @@ export function LibraryBrowser({
   // Cache de lecture (fondation hors ligne) : dernière vue connue de la biblio.
   useOfflineCache(`${coupleId}:library`, { groups, lists, total })
 
+  // Encart pédagogique (PRD_V4.1 §5) : coach mark unique au premier affichage,
+  // même mécanique que celui du Cerveau (`brain-button.tsx`). Faux au SSR ; on
+  // décide au montage client selon le flag localStorage (jamais réaffiché).
+  const [showCoach, setShowCoach] = useState(false)
+
+  // Marque l'encart comme vu et le retire (idempotent, tolérant au stockage).
+  const dismissCoach = useCallback(() => {
+    setShowCoach(false)
+    try {
+      localStorage.setItem(LIBRARY_COACH_SEEN_KEY, "1")
+    } catch {
+      // localStorage indisponible : l'encart ne réapparaîtra pas ce cycle,
+      // sans gravité (au pire il se remontre au prochain lancement).
+    }
+  }, [])
+
+  // Au tout premier affichage (aucun flag), on montre l'encart. Le setState
+  // est différé (setTimeout) pour ne pas déclencher de rendu en cascade
+  // synchrone dans l'effet (et rester SSR-safe : décidé côté client).
+  useEffect(() => {
+    let unseen = false
+    try {
+      unseen = !localStorage.getItem(LIBRARY_COACH_SEEN_KEY)
+    } catch {
+      // pas de stockage lisible : on s'abstient d'afficher (comportement sûr).
+    }
+    if (!unseen) return
+    const timer = setTimeout(() => setShowCoach(true), 0)
+    return () => clearTimeout(timer)
+  }, [])
+
   const [query, setQuery] = useState("")
   // Produits cochés pour l'export groupé (par id, survit au filtrage).
   const [selected, setSelected] = useState<Set<string>>(new Set())
   // Ouvre la feuille « Envoyer vers… » pour la sélection courante.
   const [sheetOpen, setSheetOpen] = useState(false)
+
+  // Toast « Supprimé · ANNULER » (PRD_V4.1 §4.5) : un seul à la fois pour cet
+  // écran, une nouvelle suppression remplace l'ancien.
+  const [undo, setUndo] = useState<{
+    key: number
+    restore: () => Promise<ActionResult>
+  } | null>(null)
+  const undoKeyRef = useRef(0)
+
+  function handleItemDeleted(itemId: string) {
+    undoKeyRef.current += 1
+    setUndo({
+      key: undoKeyRef.current,
+      restore: () => restoreLibraryItem(itemId),
+    })
+  }
 
   // Ensemble des ids de produits encore présents (pour ignorer une sélection
   // devenue fantôme : produit supprimé / renommé côté partenaire).
@@ -173,6 +226,16 @@ export function LibraryBrowser({
 
   return (
     <div className="flex flex-col gap-5">
+      {showCoach && <LibraryCoachCard onDismiss={dismissCoach} />}
+
+      {undo && (
+        <UndoToast
+          key={undo.key}
+          onUndo={undo.restore}
+          onDismiss={() => setUndo(null)}
+        />
+      )}
+
       <SmartItemField
         query={query}
         onChange={setQuery}
@@ -200,6 +263,7 @@ export function LibraryBrowser({
                   categories={categories}
                   selected={selected.has(item.id)}
                   onToggleSelect={() => toggleSelect(item.id)}
+                  onDeleted={handleItemDeleted}
                 />
               ))}
             </ul>
@@ -231,6 +295,42 @@ export function LibraryBrowser({
         }}
       />
     </div>
+  )
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Encart pédagogique (coach mark de la bibliothèque)                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Explique le modèle de la bibliothèque une seule fois (PRD_V4.1 §5) : même
+ * habillage que les états vides pédagogues existants (`RisoCard shadow="sauge"`),
+ * jamais de modale ni de séquence de bulles. Fermeture = vu pour toujours.
+ */
+function LibraryCoachCard({ onDismiss }: { onDismiss: () => void }) {
+  return (
+    <RisoCard shadow="sauge" className="relative pr-14">
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label="Fermer l’explication de la bibliothèque"
+        className="absolute right-1.5 top-1.5 inline-flex size-11 items-center justify-center rounded-[8px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+      >
+        <X className="size-5" strokeWidth={2.5} aria-hidden />
+      </button>
+      <p className="text-sm leading-snug text-ink-soft">
+        Ta bibliothèque se remplit toute seule : chaque article ajouté à une
+        liste finit ici.
+      </p>
+      <p className="mt-2 text-sm leading-snug text-ink-soft">
+        Les pastilles ▪▪▪ = la fréquence d’achat. Plus il y en a, plus vous le
+        prenez souvent.
+      </p>
+      <p className="mt-2 text-sm leading-snug text-ink-soft">
+        Un tap sur un produit → tu l’envoies dans une liste. Les rayons se
+        gèrent dans le Profil.
+      </p>
+    </RisoCard>
   )
 }
 
@@ -359,11 +459,14 @@ function LibraryRow({
   categories,
   selected,
   onToggleSelect,
+  onDeleted,
 }: {
   item: LibraryItemView
   categories: CategoryChoice[]
   selected: boolean
   onToggleSelect: () => void
+  /** Suppression confirmée : le parent décide s'il propose le toast ANNULER. */
+  onDeleted: (itemId: string) => void
 }) {
   const [isPending, startTransition] = useTransition()
   // Un seul panneau ouvert à la fois sous la ligne : édition OU suppression.
@@ -636,7 +739,10 @@ function LibraryRow({
               onClick={() =>
                 run(
                   () => deleteLibraryItem(item.id),
-                  () => setMode(null),
+                  () => {
+                    setMode(null)
+                    onDeleted(item.id)
+                  },
                 )
               }
             >

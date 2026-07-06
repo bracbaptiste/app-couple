@@ -8,8 +8,9 @@ import { useMemo, useRef, useState, useTransition } from "react"
 import { RisoButton } from "@/components/ui/riso-button"
 import { GhostTile } from "@/components/shared/ghost-tile"
 import { NewRecipeSheet } from "@/components/recipes/NewRecipeSheet"
+import { UndoToast } from "@/components/shared/undo-toast"
 import { useSwipeReveal } from "@/lib/hooks/useSwipeReveal"
-import { deleteRecipe } from "./actions"
+import { deleteRecipe, restoreRecipe, type DeleteRecipeResult } from "./actions"
 import { cn } from "@/lib/utils"
 import {
   TYPES_PLAT,
@@ -58,6 +59,30 @@ export function RecipesBrowser({ recipes }: { recipes: RecipeCardView[] }) {
   // La tuile fantôme (fin de grille) ouvre le chooser d'ajout (§4.6).
   const [adding, setAdding] = useState(false)
 
+  // Toast « Supprimé · ANNULER » (PRD_V4.1 §4.5) : un seul à la fois pour ce
+  // carnet, une nouvelle suppression remplace l'ancien.
+  const [undo, setUndo] = useState<{
+    key: number
+    restore: () => Promise<DeleteRecipeResult>
+  } | null>(null)
+  const undoKeyRef = useRef(0)
+
+  function handleRecipeDeleted(recipeId: string) {
+    undoKeyRef.current += 1
+    setUndo({
+      key: undoKeyRef.current,
+      restore: () => restoreRecipe(recipeId),
+    })
+  }
+
+  const undoToast = undo && (
+    <UndoToast
+      key={undo.key}
+      onUndo={undo.restore}
+      onDismiss={() => setUndo(null)}
+    />
+  )
+
   function toggleType(t: TypePlat) {
     setSelectedTypes((prev) => {
       const next = new Set(prev)
@@ -100,6 +125,7 @@ export function RecipesBrowser({ recipes }: { recipes: RecipeCardView[] }) {
   if (recipes.length === 0) {
     return (
       <div className="flex flex-col gap-4">
+        {undoToast}
         <p className="rounded-[10px] border-2 border-dashed border-ink bg-paper-light px-4 py-6 text-center text-sm text-ink-soft">
           Ton carnet de recettes est encore vide. Ajoute ta première recette en
           photographiant une fiche, même manuscrite — ou laisse l’IA t’en
@@ -115,6 +141,8 @@ export function RecipesBrowser({ recipes }: { recipes: RecipeCardView[] }) {
 
   return (
     <div className="flex flex-col gap-4">
+      {undoToast}
+
       {/* Recherche par titre — la bascule des filtres est intégrée dans la barre */}
       <div className="flex items-center gap-2 rounded-[10px] border-2 border-ink bg-paper-light pl-3 pr-1.5 shadow-riso-ink focus-within:shadow-riso-sauge">
         <Search className="size-5 shrink-0 text-ink" strokeWidth={2.5} aria-hidden />
@@ -199,7 +227,7 @@ export function RecipesBrowser({ recipes }: { recipes: RecipeCardView[] }) {
         <ul className="flex flex-col gap-3">
           {filtered.map((recipe) => (
             <li key={recipe.id}>
-              <RecipeCard recipe={recipe} />
+              <RecipeCard recipe={recipe} onDeleted={handleRecipeDeleted} />
             </li>
           ))}
         </ul>
@@ -277,11 +305,19 @@ const SWIPE_REVEAL = 64
  *
  * Geste « glisser pour révéler » (mutualisé via {@link useSwipeReveal}, comme
  * les tuiles de listes) : la carte glisse vers la gauche pour découvrir une
- * corbeille. Au tap, un Dialog modal demande confirmation avant la suppression
- * DÉFINITIVE de la recette (de la base). Pas de mode édition ici : juste
- * supprimer. Le calque corbeille est focusable → pleinement accessible clavier.
+ * corbeille. Au tap, un Dialog modal demande confirmation, puis soft-delete
+ * (PRD_V4.1 §4.2) — le parent propose le toast ANNULER (§4.5). Pas de mode
+ * édition ici : juste supprimer. Le calque corbeille est focusable →
+ * pleinement accessible clavier.
  */
-function RecipeCard({ recipe }: { recipe: RecipeCardView }) {
+function RecipeCard({
+  recipe,
+  onDeleted,
+}: {
+  recipe: RecipeCardView
+  /** Suppression confirmée : le parent décide s'il propose le toast ANNULER. */
+  onDeleted: (recipeId: string) => void
+}) {
   const duree = formatDuree(recipe.dureeMinutes)
   // On limite à 3 étiquettes affichées (+ « +N ») pour garder la carte lisible.
   const tagsVisibles = recipe.tags.slice(0, 3)
@@ -441,6 +477,7 @@ function RecipeCard({ recipe }: { recipe: RecipeCardView }) {
         recipe={recipe}
         open={deleting}
         onOpenChange={setDeleting}
+        onDeleted={onDeleted}
       />
     </div>
   )
@@ -451,22 +488,26 @@ function RecipeCard({ recipe }: { recipe: RecipeCardView }) {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Dialog de confirmation avant suppression DÉFINITIVE d'une recette.
+ * Dialog de confirmation avant suppression d'une recette.
  *
  * Modal base-ui (mêmes codes que la suppression de liste) pour le piège de focus
  * et la cohérence. « Annuler » reçoit le focus initial et fait office de bouton
  * par défaut, afin d'éviter les suppressions par erreur ; « Supprimer » (variante
  * brique) lance réellement `deleteRecipe`. À la réussite, la recette disparaît du
- * carnet via revalidatePath, donc on referme simplement le Dialog.
+ * carnet via revalidatePath ; on referme le Dialog et on prévient le parent, qui
+ * propose le toast ANNULER (PRD_V4.1 §4.5).
  */
 function DeleteRecipeDialog({
   recipe,
   open,
   onOpenChange,
+  onDeleted,
 }: {
   recipe: RecipeCardView
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** Suppression réussie : le parent décide s'il propose le toast ANNULER. */
+  onDeleted: (recipeId: string) => void
 }) {
   const [isPending, startTransition] = useTransition()
   const [error, setError] = useState<string | undefined>()
@@ -476,8 +517,12 @@ function DeleteRecipeDialog({
     setError(undefined)
     startTransition(async () => {
       const result = await deleteRecipe(recipe.id)
-      if (!result.ok) setError(result.error)
-      else onOpenChange(false)
+      if (!result.ok) {
+        setError(result.error)
+        return
+      }
+      onOpenChange(false)
+      onDeleted(recipe.id)
     })
   }
 
@@ -504,7 +549,7 @@ function DeleteRecipeDialog({
           </Dialog.Title>
           <Dialog.Description className="mt-2 text-[13px] leading-snug text-ink">
             Êtes-vous sûr de vouloir supprimer la recette « {recipe.titre} » et
-            tous ses ingrédients&nbsp;? Cette action est définitive.
+            tous ses ingrédients&nbsp;?
           </Dialog.Description>
 
           {error && (

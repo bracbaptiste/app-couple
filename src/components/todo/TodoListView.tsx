@@ -2,16 +2,19 @@
 
 import Link from "next/link"
 import { ArrowLeft } from "lucide-react"
-import { useMemo, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 
 import { AddTaskBar } from "./AddTaskBar"
 import { DonePanel } from "./DonePanel"
 import { TaskFilterBar } from "./TaskFilterBar"
 import { TaskItem } from "./TaskItem"
+import { UndoToast } from "@/components/shared/undo-toast"
 import { useRealtimeTasks } from "@/lib/realtime"
 import { runMutation } from "@/lib/offline/mutation-queue"
 import { useOfflineCache } from "@/lib/offline/use-offline-cache"
 import { useOfflineOptimistic } from "@/lib/offline/use-offline-optimistic"
+import { useOnlineStatus } from "@/lib/offline/use-online-status"
+import { restoreTask, type ActionResult } from "@/app/(app)/lists/[listId]/task-actions"
 import { type Recurrence } from "@/lib/tasks/recurrence"
 import { parisTodayIso } from "@/lib/tasks/dueBucket"
 import {
@@ -192,6 +195,15 @@ export function TodoListView({
   } = useOfflineOptimistic(combined, applyTaskAction)
   const [error, setError] = useState<string | undefined>()
 
+  // Toast « Supprimé · ANNULER » (PRD_V4.1 §4.5) : un seul à la fois pour cet
+  // écran, une nouvelle suppression remplace l'ancien.
+  const [undo, setUndo] = useState<{
+    key: number
+    restore: () => Promise<ActionResult>
+  } | null>(null)
+  const undoKeyRef = useRef(0)
+  const online = useOnlineStatus()
+
   function handleAdd(
     title: string,
     opts: { dueDate?: Date; assignedTo: string | null; recurrence: Recurrence },
@@ -327,7 +339,19 @@ export function TodoListView({
     startAction(async () => {
       apply(action)
       const result = await runMutation("deleteTask", { listId, taskId })
-      if (!result.ok) setError(result.error)
+      if (!result.ok) {
+        setError(result.error)
+        return
+      }
+      // Hors ligne, `runMutation` renvoie un succès optimiste sans avoir
+      // réellement supprimé côté serveur (mutation mise en file) : rien à
+      // annuler pour l'instant, on ne propose donc pas le toast.
+      if (!online) return
+      undoKeyRef.current += 1
+      setUndo({
+        key: undoKeyRef.current,
+        restore: () => restoreTask(listId, taskId),
+      })
     })
   }
 
@@ -376,6 +400,14 @@ export function TodoListView({
 
   return (
     <div className="flex flex-col">
+      {undo && (
+        <UndoToast
+          key={undo.key}
+          onUndo={undo.restore}
+          onDismiss={() => setUndo(null)}
+        />
+      )}
+
       <div className="mb-4">
         {/* Retour : cible tap 44px (DESIGN_SYSTEM §8), aligné au bord gauche. */}
         <Link
