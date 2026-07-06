@@ -10,7 +10,6 @@ import {
   ChefHat,
   Calendar,
   User,
-  Check,
   type LucideIcon,
 } from "lucide-react"
 
@@ -225,15 +224,6 @@ export function BrainButton({ className }: { className?: string }) {
                 )}
               >
                 <Icon className="size-[26px]" strokeWidth={2.5} aria-hidden />
-                {active && (
-                  // Coche marquant l'outil courant (§4.3).
-                  <span
-                    aria-hidden
-                    className="absolute -right-1 -top-1 flex size-4 items-center justify-center rounded-full border border-paper-light bg-ink text-paper-light"
-                  >
-                    <Check className="size-2.5" strokeWidth={3} />
-                  </span>
-                )}
               </Link>
             )
           })}
