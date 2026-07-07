@@ -1,15 +1,15 @@
 "use client"
 
-import { ChevronDown, Plus, Repeat, SlidersHorizontal, X } from "lucide-react"
+import { Plus, SlidersHorizontal, X } from "lucide-react"
 import { useRef, useState } from "react"
 
+import { RisoButton } from "@/components/ui/riso-button"
 import { RisoDatePicker } from "@/components/ui/riso-date-picker"
 import { cn } from "@/lib/utils"
 import { getDueLabel } from "@/lib/hooks/useTaskState"
 import { type Recurrence, NO_RECURRENCE } from "@/lib/tasks/recurrence"
 
 import { TaskOptionsFields } from "./TaskOptionsFields"
-import { VoiceAddTask } from "./VoiceAddTask"
 
 /** Membre du couple proposé comme assigné. */
 type AddTaskMember = { id: string; name: string; color: "sauge" | "brique" }
@@ -27,16 +27,15 @@ export type AddTaskOptions = {
  * Reprend l'`add-bar` V1 (fond sauge, bordure 2px encre, radius 10, ombre
  * encre), icône `+` à gauche, placeholder « Ajouter une tâche… ».
  *
- * À droite, un mini-bouton calendrier ouvre le `RisoDatePicker` (calendrier
- * maison aux couleurs de l'appli). La date choisie s'affiche en badge
- * supprimable. À la création, on envoie le titre + la date (ou rien). Sur
- * mobile, choisir une date alors qu'un nom est saisi enregistre directement la
- * tâche (le calendrier étant la dernière étape).
+ * La barre reste minimale : le champ, puis UN SEUL bouton « réglages » (icône
+ * curseurs) au bout. Ce bouton déplie sous la barre un unique panneau qui
+ * regroupe toutes les options d'une tâche — ÉCHÉANCE (via {@link RisoDatePicker}),
+ * ASSIGNÉ et RÉCURRENCE (PRD §3.3, §3.4) — et un bouton « Ajouter » pour valider
+ * sans revenir au champ.
  *
- * Sous la barre, un volet repliable « Options » expose l'ASSIGNÉ et la
- * RÉCURRENCE (PRD §3.3, §3.4). L'assigné par défaut est porté par l'écran
- * (`defaultAssignee` : non assigné pour une liste partagée, le propriétaire
- * pour une liste perso) ; il est remis à ce défaut après chaque ajout.
+ * L'assigné par défaut est porté par l'écran (`defaultAssignee` : non assigné
+ * pour une liste partagée, le propriétaire pour une liste perso) ; échéance,
+ * assigné et récurrence sont remis à leur défaut après chaque ajout.
  */
 type AddTaskBarProps = {
   /** Ajoute une tâche, avec ses options (échéance · assigné · récurrence). */
@@ -47,12 +46,6 @@ type AddTaskBarProps = {
   members: AddTaskMember[]
   /** Assigné par défaut à la création (null = non assigné). */
   defaultAssignee: string | null
-  /** Toutes les to-do lists du couple (sélecteur de liste cible de l'ajout vocal). */
-  lists: { id: string; name: string }[]
-  /** Liste affichée — liste cible par défaut de l'ajout vocal. */
-  currentListId: string
-  /** Ajoute une tâche par la voix sur la liste choisie (chemin d'insertion normal). */
-  onVoiceAdd: (listId: string, title: string, opts: AddTaskOptions) => void
 }
 
 const TITLE_MAX = 120
@@ -67,9 +60,6 @@ function AddTaskBar({
   disabled = false,
   members,
   defaultAssignee,
-  lists,
-  currentListId,
-  onVoiceAdd,
 }: AddTaskBarProps) {
   const [title, setTitle] = useState("")
   // Échéance au format « yyyy-mm-dd » (valeur du RisoDatePicker).
@@ -96,19 +86,15 @@ function AddTaskBar({
     })
     setTitle("")
     resetOptions()
+    // Panneau refermé après un ajout : on repart sur une barre nette.
+    setOptionsOpen(false)
+    requestAnimationFrame(() => inputRef.current?.focus())
   }
 
   function submit() {
     if (!trimmed) return
     emit(trimmed, due)
   }
-
-  // Récap visible quand le volet est replié mais que des options non neutres
-  // sont définies : pastille d'assigné + indicateur de récurrence.
-  const assignee = assignedTo
-    ? members.find((m) => m.id === assignedTo) ?? null
-    : null
-  const isRecurring = recurrence.type !== "none"
 
   return (
     <div className="flex flex-col gap-2">
@@ -132,99 +118,84 @@ function AddTaskBar({
           className="h-12 w-full bg-transparent text-base font-medium text-ink outline-none placeholder:font-body placeholder:text-ink-soft disabled:opacity-50"
         />
 
-        {/* Badge de la date choisie — supprimable. */}
-        {due && (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-[4px] border-[1.5px] border-ink bg-paper-light px-1.5 py-[3px] font-display text-[10px] uppercase leading-none text-ink-soft">
-            {getDueLabel(due)}
-            <button
-              type="button"
-              onClick={() => setDue("")}
-              disabled={disabled}
-              aria-label="Retirer l’échéance"
-              className="relative -mr-0.5 inline-flex items-center justify-center rounded-[3px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-ink before:absolute before:left-1/2 before:top-1/2 before:size-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-['']"
-            >
-              <X className="size-3" strokeWidth={3} aria-hidden />
-            </button>
-          </span>
-        )}
-
-        {/* Ajout vocal : micro → dictée native du clavier → écran de validation. */}
-        <VoiceAddTask
-          lists={lists}
-          currentListId={currentListId}
-          members={members}
-          defaultAssignee={defaultAssignee}
-          disabled={disabled}
-          onConfirm={onVoiceAdd}
-        />
-
-        {/* Calendrier maison aux couleurs de l'appli (remplace le picker natif). */}
-        <RisoDatePicker
-          value={due}
-          onChange={(v) => {
-            // Si une date est choisie et qu'un nom est déjà saisi, on enregistre
-            // directement la tâche (le calendrier étant la dernière étape sur mobile).
-            if (v && trimmed) {
-              emit(trimmed, v)
-              requestAnimationFrame(() => inputRef.current?.focus())
-              return
-            }
-            setDue(v)
-            // Sinon (nom vide), on rend le focus au champ pour qu'« Entrée » enregistre.
-            requestAnimationFrame(() => inputRef.current?.focus())
-          }}
-          disabled={disabled}
-        />
-      </form>
-
-      {/* Volet « Options » repliable : assigné + récurrence. */}
-      <div className="flex flex-col gap-2">
+        {/* Bouton unique « réglages » : regroupe échéance + assigné + récurrence. */}
         <button
           type="button"
           onClick={() => setOptionsOpen((v) => !v)}
           aria-expanded={optionsOpen}
+          aria-label="Options de la tâche (échéance, assigné, récurrence)"
           disabled={disabled}
-          className="inline-flex items-center gap-2 self-start rounded-[8px] px-2 py-1 font-mono text-[11px] font-bold uppercase tracking-wide text-ink-soft outline-none focus-visible:ring-2 focus-visible:ring-sauge focus-visible:ring-offset-2 focus-visible:ring-offset-paper active:translate-x-px active:translate-y-px disabled:opacity-50"
+          className={cn(
+            "relative inline-flex size-9 shrink-0 items-center justify-center rounded-[8px] border-2 outline-none transition-transform focus-visible:ring-2 focus-visible:ring-ink active:translate-x-px active:translate-y-px disabled:opacity-50",
+            optionsOpen
+              ? "border-ink bg-ink text-paper"
+              : "border-transparent text-ink hover:border-ink hover:bg-paper-light",
+          )}
         >
-          <SlidersHorizontal className="size-3.5" strokeWidth={2.5} aria-hidden />
-          Options
-          {/* Récap des options définies (volet replié). */}
-          {!optionsOpen && assignee && (
-            <span
-              aria-hidden
-              className={cn(
-                "inline-block size-2.5 rounded-full border-[1.5px] border-ink",
-                assignee.color === "sauge" ? "bg-sauge" : "bg-brique",
-              )}
-            />
-          )}
-          {!optionsOpen && isRecurring && (
-            <Repeat className="size-3" strokeWidth={2.5} aria-hidden />
-          )}
-          <ChevronDown
-            className={cn(
-              "size-3.5 transition-transform",
-              optionsOpen ? "rotate-180" : "rotate-0",
-            )}
-            strokeWidth={2.5}
-            aria-hidden
-          />
+          <SlidersHorizontal className="size-5" strokeWidth={2.5} aria-hidden />
         </button>
+      </form>
 
-        {optionsOpen && (
-          <div className="rounded-[10px] border-2 border-ink bg-paper-light p-3">
-            <TaskOptionsFields
-              members={members}
-              assignedTo={assignedTo}
-              onAssignedToChange={setAssignedTo}
-              recurrence={recurrence}
-              onRecurrenceChange={setRecurrence}
-              dueDate={due || null}
-              disabled={disabled}
-            />
+      {/* Panneau unique : échéance + assigné + récurrence + bouton d'ajout. */}
+      {optionsOpen && (
+        <div className="flex flex-col gap-3 rounded-[10px] border-2 border-ink bg-paper-light p-3">
+          {/* ---- Échéance (le calendrier, désormais dans le panneau) ---- */}
+          <div className="flex flex-col gap-1.5">
+            <span className="font-mono text-[11px] font-bold uppercase tracking-wide text-ink-soft">
+              Échéance
+            </span>
+            <div className="flex items-center gap-2">
+              <RisoDatePicker
+                value={due}
+                onChange={setDue}
+                size="sm"
+                disabled={disabled}
+              />
+              {due ? (
+                <span className="inline-flex items-center gap-1 rounded-[4px] border-[1.5px] border-ink bg-paper-light px-1.5 py-[3px] font-display text-[10px] uppercase leading-none text-ink-soft">
+                  {getDueLabel(due)}
+                  <button
+                    type="button"
+                    onClick={() => setDue("")}
+                    disabled={disabled}
+                    aria-label="Retirer l’échéance"
+                    className="relative -mr-0.5 inline-flex items-center justify-center rounded-[3px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-ink before:absolute before:left-1/2 before:top-1/2 before:size-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-['']"
+                  >
+                    <X className="size-3" strokeWidth={3} aria-hidden />
+                  </button>
+                </span>
+              ) : (
+                <span className="font-body text-[13px] text-ink-soft">
+                  Aucune
+                </span>
+              )}
+            </div>
           </div>
-        )}
-      </div>
+
+          {/* ---- Assigné + récurrence ---- */}
+          <TaskOptionsFields
+            members={members}
+            assignedTo={assignedTo}
+            onAssignedToChange={setAssignedTo}
+            recurrence={recurrence}
+            onRecurrenceChange={setRecurrence}
+            dueDate={due || null}
+            disabled={disabled}
+          />
+
+          {/* Validation depuis le panneau (sans revenir au champ). */}
+          <div className="flex justify-end">
+            <RisoButton
+              type="button"
+              size="sm"
+              onClick={submit}
+              disabled={disabled || !trimmed}
+            >
+              Ajouter
+            </RisoButton>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -20,12 +20,11 @@ import { TaskOptionsFields } from "./TaskOptionsFields"
 
 /**
  * TaskReviewSheet — l'ÉCRAN DE VALIDATION de tâche V2.1 (PRD-taches-v2.1 §3.2),
- * extrait tel quel de {@link VoiceAddTask} pour être RÉUTILISÉ (PRD V4 §5.2 :
- * `taches.ajouter` = niveau 2 → « écran de validation V2.1 existant, pré-rempli »).
+ * RÉUTILISÉ par le Cerveau (PRD V4 §5.2 : `taches.ajouter` = niveau 2 → « écran
+ * de validation V2.1 existant, pré-rempli »).
  *
- * Deux points d'entrée le montent, à l'identique :
- *   - le mic de la to-do ({@link VoiceAddTask}), après dictée + parsing ;
- *   - le Cerveau ({@link BrainListening}), pour une action `taches.ajouter`.
+ * Point d'entrée : le Cerveau ({@link BrainListening}), pour une action
+ * `taches.ajouter` (dictée → parsing → validation).
  *
  * Rien n'est écrit avant que l'utilisateur ne confirme (garde-fou §3.2 / §6
  * niveau 2). Tous les champs — titre, échéance, récurrence, assigné, liste cible
@@ -127,7 +126,7 @@ export function TaskReviewSheet({
   const [assignedTo, setAssignedTo] = useState<string | null>(initial.assignedTo)
   const [listId, setListId] = useState<string>(initial.listId)
 
-  // Échap ferme le flux (cohérent avec le RisoDatePicker / VoiceAddTask).
+  // Échap ferme le flux (cohérent avec le RisoDatePicker).
   useEffect(() => {
     if (!open) return
     function onKey(e: KeyboardEvent) {

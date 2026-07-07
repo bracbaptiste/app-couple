@@ -69,7 +69,7 @@ export default async function ListDetailPage({
   if (list.kind === "todo") {
     // En parallèle : tâches À FAIRE, 10 dernières tâches FAITES (section « Fait »
     // §2.8), et membres (marqueur « ajouté par »).
-    const [tasksRes, doneRes, membersRes, todoListsRes] = await Promise.all([
+    const [tasksRes, doneRes, membersRes] = await Promise.all([
       supabase
         .from("tasks")
         .select(
@@ -93,23 +93,9 @@ export default async function ListDetailPage({
         .from("profiles")
         .select("id, display_name, color")
         .eq("couple_id", profile.couple_id),
-      // Toutes les to-do lists du couple : sélecteur de liste cible de l'ajout
-      // vocal (la tâche dictée peut viser une autre liste que celle affichée).
-      supabase
-        .from("lists")
-        .select("id, name")
-        .eq("couple_id", profile.couple_id)
-        .eq("kind", "todo")
-        .is("deleted_at", null)
-        .order("position", { ascending: true }),
     ])
 
-    if (
-      tasksRes.error ||
-      doneRes.error ||
-      membersRes.error ||
-      todoListsRes.error
-    ) {
+    if (tasksRes.error || doneRes.error || membersRes.error) {
       throw new Error("Impossible de charger la to-do list")
     }
 
@@ -149,11 +135,6 @@ export default async function ListDetailPage({
       color: asColor(m.color),
     }))
 
-    const todoLists = (todoListsRes.data ?? []).map((l) => ({
-      id: l.id,
-      name: l.name,
-    }))
-
     return (
       <section className="mx-auto w-full max-w-sm">
         <TodoListView
@@ -164,7 +145,6 @@ export default async function ListDetailPage({
           currentMemberId={profile.id}
           isShared={list.is_shared}
           ownerId={list.owner_id}
-          todoLists={todoLists}
           tasks={tasks}
           doneTasks={doneTasks}
         />

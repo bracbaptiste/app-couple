@@ -217,7 +217,7 @@ export async function POST(request: Request) {
     // `taskContext` : ce qu'il faut au client pour monter l'écran de validation
     // V2.1 EXISTANT (§5.2, `taches.ajouter` = niveau 2) sans second aller-retour —
     // to-do lists + membres, déjà relus serveur. Données du couple, jamais un
-    // secret : mêmes infos que `VoiceAddTask` a déjà côté client.
+    // secret : mêmes infos que l'écran de validation a déjà côté client.
     const taskContext = {
       todoLists,
       members: profiles.map((p) => ({
