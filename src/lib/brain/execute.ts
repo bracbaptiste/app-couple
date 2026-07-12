@@ -5,7 +5,7 @@ import { redirect } from "next/navigation"
 
 import { createClient } from "@/lib/supabase/server"
 import { type Json } from "@/types/database"
-import { guessCategory } from "@/lib/utils/guess-category"
+import { resolveCategoryName } from "@/lib/ai/categorize-item"
 import { normaliserNom } from "@/lib/utils/normalize-name-key"
 import { parseDateKey } from "@/lib/planning/week"
 import { type Unite } from "@/lib/recipes/extraction"
@@ -292,7 +292,7 @@ async function trouverOuCreerArticle(
   const categoryId = await resolveCategoryId(
     supabase,
     coupleId,
-    guessCategory(nomAffiche),
+    await resolveCategoryName(supabase, coupleId, nomAffiche),
   )
 
   const { data: created } = await supabase
@@ -335,6 +335,7 @@ function parseAddOrMergeListItem(raw: Json | null): AddOrMergeListItemResult | n
 
 async function addOrMergeListItem(
   supabase: ServerClient,
+  coupleId: string,
   userId: string,
   listId: string,
   nomAffiche: string,
@@ -346,7 +347,7 @@ async function addOrMergeListItem(
     p_list_id: listId,
     p_name: nomAffiche,
     p_nom_normalise: cle,
-    p_category_name: guessCategory(nomAffiche),
+    p_category_name: await resolveCategoryName(supabase, coupleId, nomAffiche),
     p_added_by: userId,
     p_additions: [{ quantite, unite }] as unknown as Json,
     p_count_usage: true,
@@ -413,6 +414,7 @@ export async function executeBrainActions(
           const unite: Unite | null = art.unite
           const merged = await addOrMergeListItem(
             supabase,
+            coupleId,
             userId,
             listId,
             nom,

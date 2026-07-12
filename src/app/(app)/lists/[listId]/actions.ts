@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
 
 import { createClient } from "@/lib/supabase/server"
-import { guessCategory } from "@/lib/utils/guess-category"
+import { resolveCategoryName } from "@/lib/ai/categorize-item"
 import { normalizeItemName } from "@/lib/utils/normalize-item-name"
 
 /** Client Supabase serveur typé (inféré du helper, comme dans lists/actions.ts). */
@@ -144,12 +144,13 @@ export async function addItemToList(input: AddItemInput): Promise<ActionResult> 
     }
     await supabase.rpc("increment_library_usage", { p_item_id: existing.id })
   } else {
-    // Nouveau produit : on devine son rayon et on le range si ce rayon existe
-    // chez le couple (sinon `null` = « Sans rayon »).
+    // Nouveau produit : on devine son rayon (dictionnaire, puis repli IA si
+    // inconnu) et on le range si ce rayon existe chez le couple (sinon `null` =
+    // « Sans rayon »).
     const categoryId = await resolveCategoryId(
       supabase,
       coupleId,
-      guessCategory(name),
+      await resolveCategoryName(supabase, coupleId, name),
     )
 
     const { data: created, error } = await supabase

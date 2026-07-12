@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache"
 import { redirect } from "next/navigation"
 
 import { createClient } from "@/lib/supabase/server"
-import { guessCategory } from "@/lib/utils/guess-category"
+import { resolveCategoryName } from "@/lib/ai/categorize-item"
 import { normalizeItemName } from "@/lib/utils/normalize-item-name"
 
 /** Client Supabase serveur typé (inféré du helper, comme dans lists/actions.ts). */
@@ -176,7 +176,7 @@ export async function addLibraryItem(
     resolvedCategoryId = await resolveCategoryId(
       supabase,
       coupleId,
-      guessCategory(name),
+      await resolveCategoryName(supabase, coupleId, name),
     )
   }
 

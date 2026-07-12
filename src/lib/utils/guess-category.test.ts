@@ -35,6 +35,22 @@ describe("guessCategory", () => {
     expect(guessCategory("Pain de mie")).toBe("Boulangerie")
   })
 
+  it("classe les manquants courants ajoutés à la table", () => {
+    expect(guessCategory("Lentille verte")).toBe("Épicerie")
+    expect(guessCategory("Dentifrice")).toBe("Hygiène")
+    expect(guessCategory("Chèvre")).toBe("Crémerie & Œufs")
+    expect(guessCategory("Cabillaud")).toBe("Viande & Poisson")
+    expect(guessCategory("Courge butternut")).toBe("Fruits & Légumes")
+  })
+
+  it("rend les mots-clés composés tolérants au pluriel", () => {
+    // « haricots verts » (pluriel) doit reconnaître « haricot vert ».
+    expect(guessCategory("Haricots verts")).toBe("Fruits & Légumes")
+    // … sans confondre avec « haricot rouge » (Épicerie).
+    expect(guessCategory("Haricots rouges")).toBe("Épicerie")
+    expect(guessCategory("Pois chiches")).toBe("Épicerie")
+  })
+
   it("retombe sur « Autre » quand rien ne correspond", () => {
     expect(guessCategory("Bougie parfumée")).toBe(FALLBACK_CATEGORY)
     expect(guessCategory("xyzzy")).toBe(FALLBACK_CATEGORY)
